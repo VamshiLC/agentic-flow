@@ -134,22 +134,29 @@ DETAILED_PROMPTS = {
     },
 
     "homeless_encampment": {
-        "what": "Makeshift shelter or living area in public space",
+        "what": "ACTUAL makeshift shelter with VISIBLE tents, tarps, or people living in public space",
         "visual_cues": [
-            "Tents, tarps, or makeshift shelters",
-            "Multiple sleeping bags or bedding visible",
-            "Shopping carts or accumulated belongings",
-            "Temporary structures with personal items",
-            "Cardboard, plastic, or fabric shelters",
-            "Cooking equipment or personal belongings visible"
+            "CRITICAL: Must have CLEAR, VISIBLE evidence of ALL of these:",
+            "- Actual tents (fabric dome structures) OR tarps suspended/draped as shelter",
+            "- Visible sleeping bags, blankets, or bedding on the ground",
+            "- Personal belongings, bags, or shopping carts clearly visible",
+            "- Human presence or signs of active habitation",
+            "IMPORTANT: Vegetation, weeds, trash alone are NOT encampments",
+            "MUST see actual shelter structures (tents/tarps) to qualify"
         ],
-        "location": "Under bridges, in doorways, vacant lots, parks, sidewalks",
+        "location": "Under bridges, in doorways, vacant lots, parks, sidewalks - WITH visible shelters",
         "not_this": [
+            "⚠️ NEVER detect vegetation, weeds, or overgrown areas",
+            "⚠️ NEVER detect empty fenced areas with plants",
+            "⚠️ NEVER detect trash or debris without shelter structures",
+            "⚠️ NEVER detect dirt patches or bare ground",
             "Camping tents in designated campgrounds",
             "Construction worker break areas",
             "Organized outdoor events",
             "Stored equipment or materials",
-            "Temporary vendor setups"
+            "Temporary vendor setups",
+            "Random piles of items without visible shelter",
+            "CRITICAL: If you don't see tents or tarps, DO NOT DETECT!"
         ]
     },
 
@@ -367,12 +374,26 @@ Defect: abandoned_vehicle, Box: [200, 150, 900, 550], Confidence: 0.78
 
 If NO defects match the criteria: "No defects detected"
 
-IMPORTANT RULES:
-✓ Only detect if you are CONFIDENT (>70%) it matches the criteria
-✓ Use the visual indicators and negative examples to guide you
-✓ Consider location/context clues
-✓ If uncertain, DO NOT detect - false positives are costly
-✓ Provide realistic confidence scores based on match quality
+🚨 CRITICAL ACCURACY RULES 🚨:
+✓ ONLY detect if you are HIGHLY CONFIDENT (>80%) it matches ALL the criteria
+✓ FALSE POSITIVES are EXTREMELY COSTLY - be conservative!
+✓ Read the "DO NOT CONFUSE WITH" section CAREFULLY before detecting
+✓ If something looks ambiguous or unclear, DO NOT DETECT IT
+✓ For sensitive categories (homeless_encampment, abandoned_vehicle, homeless_person):
+  - Require MULTIPLE clear visual indicators (not just one)
+  - NEVER detect based on vegetation, shadows, or unclear objects
+  - Err on the side of NOT detecting rather than false positive
+✓ Provide realistic confidence scores - don't inflate them
+✓ Double-check each detection against the negative examples
+
+ACCURACY CHECKLIST FOR EACH DETECTION:
+1. Does it match ALL the visual cues?
+2. Is it NOT in the "DO NOT CONFUSE WITH" list?
+3. Does the location make sense?
+4. Am I >80% confident?
+5. Have I checked for ambiguity?
+
+If you answer NO to any question, DO NOT DETECT!
 
 Now carefully analyze this image:
 """

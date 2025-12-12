@@ -249,24 +249,64 @@ def process_video_multi_detection(
 
 
 def draw_category_detections(frame_rgb, detections, category):
-    """Draw detections for a specific category on frame."""
+    """Draw detections with colored segmentation masks for a specific category on frame."""
     frame = frame_rgb.copy()
     color_bgr = DEFECT_COLORS.get(category, (0, 255, 0))
     # Convert BGR to RGB for drawing
     color_rgb = (color_bgr[2], color_bgr[1], color_bgr[0])
 
+    # Create mask overlay
+    mask_overlay = frame.copy()
+
     for det in detections:
         bbox = det.get('bbox', [])
+        has_mask = det.get('has_mask', False)
+        mask = det.get('mask', None)
+
+        # Draw segmentation mask if available
+        if has_mask and mask is not None:
+            try:
+                # Convert mask to numpy array if needed
+                if isinstance(mask, list):
+                    mask_array = np.array(mask, dtype=np.uint8)
+                else:
+                    mask_array = np.array(mask, dtype=np.uint8)
+
+                # Ensure mask is 2D
+                if mask_array.ndim > 2:
+                    mask_array = mask_array.squeeze()
+
+                # Resize mask to frame size if needed
+                if mask_array.shape != (frame.shape[0], frame.shape[1]):
+                    mask_array = cv2.resize(mask_array,
+                                          (frame.shape[1], frame.shape[0]),
+                                          interpolation=cv2.INTER_NEAREST)
+
+                # Create colored mask
+                colored_mask = np.zeros_like(frame)
+                colored_mask[mask_array > 0] = color_rgb
+
+                # Blend with overlay (30% transparency)
+                mask_overlay = cv2.addWeighted(mask_overlay, 1.0, colored_mask, 0.3, 0)
+
+                # Draw mask contour
+                contours, _ = cv2.findContours(mask_array, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                cv2.drawContours(frame, contours, -1, color_rgb, 2)
+
+            except Exception as e:
+                logger.warning(f"Failed to render mask for {category}: {e}")
+
         if len(bbox) == 4:
             x1, y1, x2, y2 = map(int, bbox)
 
             # Draw box
             cv2.rectangle(frame, (x1, y1), (x2, y2), color_rgb, 3)
 
-            # Draw label with confidence
+            # Draw label with confidence and mask status
             label = det.get('label', 'unknown')
             conf = det.get('confidence', 0.0)
-            text = f"{label} {conf:.2f}"
+            mask_status = "✓M" if has_mask else ""
+            text = f"{label} {conf:.2f} {mask_status}"
 
             # Background for text
             (text_w, text_h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
@@ -283,7 +323,10 @@ def draw_category_detections(frame_rgb, detections, category):
                 2
             )
 
-    return frame
+    # Blend mask overlay with frame
+    final = cv2.addWeighted(frame, 0.7, mask_overlay, 0.3, 0)
+
+    return final
 
 
 if __name__ == "__main__":

@@ -189,7 +189,7 @@ class InfrastructureDetectionAgentHF:
         self,
         response: str,
         image_size: Tuple[int, int],
-        confidence_threshold: float = 0.3
+        confidence_threshold: float = 0.7
     ) -> List[Dict]:
         """
         Parse detection results from Qwen text response.
@@ -210,13 +210,24 @@ class InfrastructureDetectionAgentHF:
         if "no defects detected" in response.lower():
             return detections
 
-        # Pattern: Defect: <type>, Box: [x1, y1, x2, y2]
-        pattern = r'Defect:\s*([^,\n]+),\s*Box:\s*\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\]'
-        matches = re.findall(pattern, response, re.IGNORECASE)
+        # Pattern: Defect: <type>, Box: [x1, y1, x2, y2], Confidence: <score>
+        # Also support pattern without confidence for backward compatibility
+        pattern_with_conf = r'Defect:\s*([^,\n]+),\s*Box:\s*\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\],\s*Confidence:\s*([\d.]+)'
+        pattern_no_conf = r'Defect:\s*([^,\n]+),\s*Box:\s*\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\]'
 
-        for match in matches:
+        matches_with_conf = re.findall(pattern_with_conf, response, re.IGNORECASE)
+        matches_no_conf = re.findall(pattern_no_conf, response, re.IGNORECASE)
+
+        # Process matches with confidence first
+        for match in matches_with_conf:
             try:
                 label = self._normalize_label(match[0].strip().lower())
+                confidence = float(match[5])
+
+                # Filter by confidence threshold
+                if confidence < confidence_threshold:
+                    logger.debug(f"Filtered out {label} with confidence {confidence:.2f} < {confidence_threshold}")
+                    continue
 
                 # Convert normalized 0-1000 coords to pixel coords
                 x1 = int(float(match[1]) * width / 1000)
@@ -241,7 +252,54 @@ class InfrastructureDetectionAgentHF:
                         "label": label,
                         "category": label,
                         "bbox": [x1, y1, x2, y2],
-                        "confidence": 0.8,
+                        "confidence": confidence,  # Use parsed confidence
+                        "color": color,
+                        "description": sam3_description  # Better prompt for SAM3
+                    }
+
+                    detections.append(detection)
+
+            except (ValueError, IndexError) as e:
+                logger.warning(f"Failed to parse detection: {match} ({e})")
+                continue
+
+        # Process matches without confidence (backward compatibility)
+        for match in matches_no_conf:
+            try:
+                label = self._normalize_label(match[0].strip().lower())
+
+                # Default confidence for backward compatibility
+                confidence = 0.8
+
+                # Filter by confidence threshold
+                if confidence < confidence_threshold:
+                    logger.debug(f"Filtered out {label} with default confidence {confidence:.2f} < {confidence_threshold}")
+                    continue
+
+                # Convert normalized 0-1000 coords to pixel coords
+                x1 = int(float(match[1]) * width / 1000)
+                y1 = int(float(match[2]) * height / 1000)
+                x2 = int(float(match[3]) * width / 1000)
+                y2 = int(float(match[4]) * height / 1000)
+
+                # Clamp to image bounds
+                x1 = max(0, min(x1, width))
+                y1 = max(0, min(y1, height))
+                x2 = max(0, min(x2, width))
+                y2 = max(0, min(y2, height))
+
+                # Validate bbox
+                if x2 > x1 and y2 > y1:
+                    color = DEFECT_COLORS.get(label, (0, 255, 0))
+
+                    # Create detailed SAM3 prompt
+                    sam3_description = self._create_sam3_prompt(label)
+
+                    detection = {
+                        "label": label,
+                        "category": label,
+                        "bbox": [x1, y1, x2, y2],
+                        "confidence": confidence,
                         "color": color,
                         "description": sam3_description  # Better prompt for SAM3
                     }

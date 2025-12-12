@@ -42,8 +42,11 @@ logging.basicConfig(
 
 
 def draw_detections(frame: np.ndarray, detections: list) -> np.ndarray:
-    """Draw bounding boxes on frame."""
+    """Draw bounding boxes and colored segmentation masks on frame."""
     annotated = frame.copy()
+
+    # Create mask overlay
+    mask_overlay = annotated.copy()
 
     for det in detections:
         label = det["label"]
@@ -51,12 +54,48 @@ def draw_detections(frame: np.ndarray, detections: list) -> np.ndarray:
         x1, y1, x2, y2 = bbox
         color = det.get("color", (0, 255, 0))
         confidence = det.get("confidence", 0.0)
+        has_mask = det.get("has_mask", False)
+        mask = det.get("mask", None)
+
+        # Draw segmentation mask if available
+        if has_mask and mask is not None:
+            try:
+                # Convert mask to numpy array if needed
+                if isinstance(mask, list):
+                    mask_array = np.array(mask, dtype=np.uint8)
+                else:
+                    mask_array = np.array(mask, dtype=np.uint8)
+
+                # Ensure mask is 2D
+                if mask_array.ndim > 2:
+                    mask_array = mask_array.squeeze()
+
+                # Resize mask to frame size if needed
+                if mask_array.shape != (frame.shape[0], frame.shape[1]):
+                    mask_array = cv2.resize(mask_array,
+                                          (frame.shape[1], frame.shape[0]),
+                                          interpolation=cv2.INTER_NEAREST)
+
+                # Create colored mask
+                colored_mask = np.zeros_like(annotated)
+                colored_mask[mask_array > 0] = color
+
+                # Blend with overlay (30% transparency)
+                mask_overlay = cv2.addWeighted(mask_overlay, 1.0, colored_mask, 0.3, 0)
+
+                # Draw mask contour
+                contours, _ = cv2.findContours(mask_array, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                cv2.drawContours(annotated, contours, -1, color, 2)
+
+            except Exception as e:
+                logging.warning(f"Failed to render mask for {label}: {e}")
 
         # Draw bbox
         cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
 
-        # Draw label
-        label_text = f"{label}: {confidence:.2f}"
+        # Draw label with mask status
+        mask_status = "✓M" if has_mask else ""
+        label_text = f"{label}: {confidence:.2f} {mask_status}"
         font_scale = 0.5
         thickness = 1
 
@@ -87,7 +126,10 @@ def draw_detections(frame: np.ndarray, detections: list) -> np.ndarray:
             thickness
         )
 
-    return annotated
+    # Blend mask overlay with annotated frame
+    final = cv2.addWeighted(annotated, 0.7, mask_overlay, 0.3, 0)
+
+    return final
 
 
 def process_image(image_path: str, detector, output_dir: str):
