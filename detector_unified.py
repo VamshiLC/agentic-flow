@@ -13,6 +13,7 @@ from typing import List, Dict, Tuple, Optional, Union
 
 from models.qwen_direct_loader import Qwen3VLDirectDetector
 from config import Config
+from prompts.category_prompts import build_detailed_prompt
 
 
 # Infrastructure defect categories (combines both your lists)
@@ -113,6 +114,18 @@ class UnifiedInfrastructureDetector:
                 use_quantization=use_quantization,
                 low_memory=low_memory
             )
+        elif mode == "agent-hf":
+            # Agentic pattern with Hugging Face (no vLLM server required)
+            from agent.detection_agent_hf import InfrastructureDetectionAgentHF
+
+            self.detector = InfrastructureDetectionAgentHF(
+                model_name=model_name,
+                sam3_processor=None,  # Will load internally
+                categories=self.categories,
+                device=device,
+                use_quantization=use_quantization,
+                low_memory=low_memory
+            )
         elif mode == "agent":
             # Use agent pattern (requires vLLM server)
             from agent.detection_agent import InfrastructureDetectionAgent
@@ -123,55 +136,19 @@ class UnifiedInfrastructureDetector:
             llm_config = get_qwen_config(model=model_name)
             self.detector = InfrastructureDetectionAgent(sam3_processor, llm_config)
         else:
-            raise ValueError(f"Unknown mode: {mode}. Use 'direct' or 'agent'")
+            raise ValueError(f"Unknown mode: {mode}. Use 'direct', 'agent-hf', or 'agent'")
 
     def _build_detection_prompt(self, categories: Optional[List[str]] = None) -> str:
         """
-        Build detailed detection prompt.
+        Build detailed detection prompt with visual cues and negative examples.
 
-        Based on your detector.py prompt structure.
+        Uses comprehensive prompts from prompts/category_prompts.py
         """
         if categories is None:
             categories = self.categories
 
-        prompt = """You are an expert infrastructure inspector analyzing street imagery.
-
-DETECT ONLY THESE CATEGORIES:
-
-"""
-
-        # Add each category with description
-        for i, category in enumerate(categories, 1):
-            description = INFRASTRUCTURE_CATEGORIES.get(
-                category,
-                f"Detect {category.replace('_', ' ')}"
-            )
-            prompt += f"{i}. {category.upper()}\n"
-            prompt += f"   {description}\n\n"
-
-        prompt += """
-OUTPUT FORMAT:
-For EACH detection, respond EXACTLY like this:
-Defect: <category>, Box: [x1, y1, x2, y2]
-
-Where:
-- <category> = one of the categories above (use exact name)
-- Coordinates are 0-1000 (normalized)
-- x1,y1 = top-left corner
-- x2,y2 = bottom-right corner
-
-EXAMPLES:
-Defect: potholes, Box: [100, 200, 400, 500]
-Defect: alligator_cracks, Box: [50, 300, 600, 700]
-Defect: abandoned_vehicle, Box: [200, 150, 800, 450]
-
-If NOTHING matches the criteria, respond: "No defects detected"
-
-BE STRICT - Only detect if you are CONFIDENT it matches the criteria.
-
-Now analyze the image:
-"""
-        return prompt
+        # Use detailed prompts for better accuracy
+        return build_detailed_prompt(categories)
 
     def detect_infrastructure(
         self,

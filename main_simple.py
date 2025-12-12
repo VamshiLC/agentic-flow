@@ -216,6 +216,18 @@ def process_video(
 
     print(f"Extracted {len(frames_to_process)} frames to process")
 
+    # Save extracted frames to disk
+    frames_dir = video_output_dir / "frames"
+    frames_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\nSaving extracted frames to {frames_dir}...")
+    for idx, (frame_rgb, _) in enumerate(frames_to_process):
+        frame_path = frames_dir / f"frame_{frame_indices[idx]:06d}.jpg"
+        frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+        cv2.imwrite(str(frame_path), frame_bgr)
+
+    print(f"Saved {len(frames_to_process)} frames")
+
     # Process frames (with batching if batch_size > 1)
     all_detections = []
     annotated_frames = []
@@ -301,6 +313,18 @@ def process_video(
                 })
 
     print(f"\nProcessed {len(frames_to_process)} frames")
+
+    # Save annotated frames to disk
+    if annotated_frames:
+        annotated_frames_dir = video_output_dir / "annotated_frames"
+        annotated_frames_dir.mkdir(parents=True, exist_ok=True)
+
+        print(f"\nSaving annotated frames to {annotated_frames_dir}...")
+        for idx, annotated_frame in enumerate(annotated_frames):
+            frame_path = annotated_frames_dir / f"frame_{frame_indices[idx]:06d}_detected.jpg"
+            cv2.imwrite(str(frame_path), annotated_frame)
+
+        print(f"Saved {len(annotated_frames)} annotated frames")
 
     # Save annotated video
     if annotated_frames:
@@ -426,6 +450,11 @@ Examples:
         action="store_true",
         help="Skip saving annotated video (faster, JSON only)"
     )
+    parser.add_argument(
+        "--use-sam3",
+        action="store_true",
+        help="Enable SAM3 segmentation (agentic mode with Qwen+SAM3, requires decord)"
+    )
 
     args = parser.parse_args()
 
@@ -434,12 +463,16 @@ Examples:
         print(f"Error: Input file not found: {args.input}")
         return 1
 
-    # Initialize detector (direct mode - no server)
+    # Determine detection mode
+    detection_mode = "agent-hf" if args.use_sam3 else "direct"
+
+    # Initialize detector
     print("="*70)
     print("ASH INFRASTRUCTURE DETECTION - HUGGING FACE TRANSFORMERS")
     print("="*70)
     print(f"Model: {args.model}")
     print(f"Device: {args.device or 'auto-detect'}")
+    print(f"Mode: {detection_mode} ({'Qwen+SAM3 Agentic' if args.use_sam3 else 'Qwen Only'})")
     print(f"Quantization: {'Enabled (8-bit)' if args.quantize else 'Disabled'}")
     print(f"Low memory mode: {'Enabled' if args.low_memory else 'Disabled'}")
     if args.mode == "video" and args.batch_size > 1:
@@ -447,7 +480,7 @@ Examples:
 
     try:
         detector = UnifiedInfrastructureDetector(
-            mode="direct",
+            mode=detection_mode,
             model_name=args.model,
             categories=args.categories,
             device=args.device,
