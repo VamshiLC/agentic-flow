@@ -51,6 +51,22 @@ tqdm>=4.66.0          # Progress bars
 matplotlib>=3.7.0     # Optional: visualization
 seaborn>=0.12.0       # Optional: visualization
 
+# ===== Memory Optimization (Optional but Recommended) =====
+# Install for 8-bit quantization support (reduces memory by ~50%)
+# Requires CUDA. Skip if using CPU only.
+# bitsandbytes>=0.41.0
+#
+# Installation:
+# pip install bitsandbytes
+#
+# Usage in main_simple.py:
+# python main_simple.py --mode video --input video.mp4 --quantize
+#
+# Benefits:
+# - Reduces VRAM usage from ~8GB to ~4GB
+# - Minimal accuracy loss (~1-2%)
+# - 10-15% slower inference (still faster than CPU)
+
 # ===== Development Tools (Optional) =====
 ipython>=8.12.0
 jupyter>=1.0.0

@@ -74,16 +74,20 @@ class UnifiedInfrastructureDetector:
         mode: str = "direct",
         model_name: str = "Qwen/Qwen3-VL-4B-Instruct",
         categories: Optional[List[str]] = None,
-        device: Optional[str] = None
+        device: Optional[str] = None,
+        use_quantization: bool = False,
+        low_memory: bool = False
     ):
         """
         Initialize unified detector.
 
         Args:
-            mode: "direct" (no server) or "agent" (vLLM server)
+            mode: "direct" (Hugging Face) or "agent" (vLLM server)
             model_name: Hugging Face model ID
             categories: List of categories to detect (default: all)
-            device: Device to use
+            device: Device to use ("cuda", "cpu", or None for auto-detect)
+            use_quantization: Use 8-bit quantization (reduces memory by ~50%)
+            low_memory: Enable low memory optimizations
         """
         self.mode = mode
         self.model_name = model_name
@@ -103,7 +107,12 @@ class UnifiedInfrastructureDetector:
 
         # Load model based on mode
         if mode == "direct":
-            self.detector = Qwen3VLDirectDetector(model_name, device)
+            self.detector = Qwen3VLDirectDetector(
+                model_name,
+                device,
+                use_quantization=use_quantization,
+                low_memory=low_memory
+            )
         elif mode == "agent":
             # Use agent pattern (requires vLLM server)
             from agent.detection_agent import InfrastructureDetectionAgent
@@ -337,14 +346,18 @@ Now analyze the image:
 
 def get_detector(
     mode: str = "direct",
-    categories: Optional[List[str]] = None
+    categories: Optional[List[str]] = None,
+    use_quantization: bool = False,
+    low_memory: bool = False
 ) -> UnifiedInfrastructureDetector:
     """
     Factory function to get detector.
 
     Args:
-        mode: "direct" (no server) or "agent" (vLLM server)
+        mode: "direct" (Hugging Face) or "agent" (vLLM server)
         categories: Categories to detect
+        use_quantization: Enable 8-bit quantization
+        low_memory: Enable low memory optimizations
 
     Returns:
         UnifiedInfrastructureDetector instance
@@ -354,7 +367,9 @@ def get_detector(
     return UnifiedInfrastructureDetector(
         mode=mode,
         model_name=config.QWEN_MODEL,
-        categories=categories
+        categories=categories,
+        use_quantization=use_quantization,
+        low_memory=low_memory
     )
 
 
