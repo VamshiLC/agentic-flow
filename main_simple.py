@@ -368,14 +368,14 @@ def process_video(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="ASH Infrastructure Detection (Hugging Face Transformers - No vLLM Server)",
+        description="ASH Infrastructure Detection - Agentic Pipeline (Qwen3-VL + SAM3)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Process single image
+  # Process single image with Qwen3-VL + SAM3
   python main_simple.py --mode image --input frame.jpg
 
-  # Process video at 2 FPS
+  # Process video at 2 FPS with segmentation masks
   python main_simple.py --mode video --input video.mp4 --fps 2.0
 
   # Batch processing for faster inference
@@ -389,6 +389,8 @@ Examples:
 
   # Force CPU usage
   python main_simple.py --mode image --input frame.jpg --device cpu
+
+Note: All processing now uses the agentic pipeline (Qwen3-VL for detection + SAM3 for segmentation)
         """
     )
 
@@ -450,11 +452,6 @@ Examples:
         action="store_true",
         help="Skip saving annotated video (faster, JSON only)"
     )
-    parser.add_argument(
-        "--use-sam3",
-        action="store_true",
-        help="Enable SAM3 segmentation (agentic mode with Qwen+SAM3, requires decord)"
-    )
 
     args = parser.parse_args()
 
@@ -463,16 +460,13 @@ Examples:
         print(f"Error: Input file not found: {args.input}")
         return 1
 
-    # Determine detection mode
-    detection_mode = "agent-hf" if args.use_sam3 else "direct"
-
     # Initialize detector
     print("="*70)
-    print("ASH INFRASTRUCTURE DETECTION - HUGGING FACE TRANSFORMERS")
+    print("ASH INFRASTRUCTURE DETECTION - AGENTIC PIPELINE (Qwen3-VL + SAM3)")
     print("="*70)
     print(f"Model: {args.model}")
     print(f"Device: {args.device or 'auto-detect'}")
-    print(f"Mode: {detection_mode} ({'Qwen+SAM3 Agentic' if args.use_sam3 else 'Qwen Only'})")
+    print(f"Pipeline: Qwen3-VL detection + SAM3 segmentation")
     print(f"Quantization: {'Enabled (8-bit)' if args.quantize else 'Disabled'}")
     print(f"Low memory mode: {'Enabled' if args.low_memory else 'Disabled'}")
     if args.mode == "video" and args.batch_size > 1:
@@ -480,7 +474,6 @@ Examples:
 
     try:
         detector = UnifiedInfrastructureDetector(
-            mode=detection_mode,
             model_name=args.model,
             categories=args.categories,
             device=args.device,

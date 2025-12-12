@@ -82,10 +82,9 @@ def process_video_multi_detection(
     # Calculate frame sampling
     frame_interval = max(1, int(video_fps / target_fps))
 
-    # Initialize detector with ALL categories (agent-hf mode = Qwen + SAM3)
+    # Initialize detector with ALL categories (Qwen3-VL + SAM3)
     print("Initializing Qwen3 + SAM3 detector...")
     detector = UnifiedInfrastructureDetector(
-        mode="agent-hf",  # Uses Qwen3 (classify) + SAM3 (segment)
         categories=None,   # ALL categories
         device=device,
         use_quantization=use_quantization,

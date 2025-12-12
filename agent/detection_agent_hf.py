@@ -300,17 +300,27 @@ class InfrastructureDetectionAgentHF:
             if isinstance(image, str):
                 image = Image.open(image).convert('RGB')
 
-            # Call SAM3 processor
-            # SAM3's processor expects: (image, text_query)
-            result = self.sam3_processor(image, query)
+            # CORRECT SAM3 API usage
+            # Step 1: Set the image and get inference state
+            inference_state = self.sam3_processor.set_image(image)
 
-            # Extract mask from result
-            if isinstance(result, dict) and 'mask' in result:
-                return result['mask']
-            elif isinstance(result, np.ndarray):
-                return result
+            # Step 2: Set text prompt and get output
+            output = self.sam3_processor.set_text_prompt(
+                state=inference_state,
+                prompt=query
+            )
+
+            # Step 3: Extract masks from output
+            if isinstance(output, dict) and 'masks' in output:
+                masks = output['masks']
+                # Return first mask if multiple masks returned
+                if len(masks) > 0:
+                    return masks[0]  # Shape: (H, W) boolean array
+                else:
+                    logger.warning(f"No masks returned for query: {query}")
+                    return None
             else:
-                logger.warning(f"Unexpected SAM3 result type: {type(result)}")
+                logger.warning(f"Unexpected SAM3 output format: {type(output)}")
                 return None
 
         except Exception as e:

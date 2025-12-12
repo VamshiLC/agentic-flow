@@ -103,23 +103,33 @@ DETAILED_PROMPTS = {
     },
 
     "abandoned_vehicle": {
-        "what": "Car, truck, or vehicle that appears inoperable or permanently left",
+        "what": "Severely damaged, deteriorated vehicle or car being used as shelter (homeless situation)",
         "visual_cues": [
-            "Flat or missing tires",
-            "Broken or missing windows",
-            "Vegetation growth around/on vehicle",
-            "Heavy dust accumulation or faded paint",
-            "Visible rust, damage, or decay",
-            "Missing license plates or registration stickers",
-            "Doors/hood left open or missing parts"
+            "CRITICAL: Must have MULTIPLE (3+) of these indicators:",
+            "- Flat, missing, or severely deflated tires",
+            "- Broken, shattered, or missing windows/windshield",
+            "- Thick layer of dust, dirt covering entire vehicle (not just light dust)",
+            "- Covered with tarps, blankets, cardboard, or paper (homeless shelter)",
+            "- Person visibly living inside with belongings/bedding",
+            "- Vegetation/weeds growing around wheels or under vehicle",
+            "- Extensive rust, body damage, or missing parts (bumpers, doors, hood)",
+            "- Faded paint with peeling/chipping covering large areas",
+            "- Missing or expired license plates",
+            "- Appears unmoved for extended period (debris accumulation)",
+            "ONLY detect if vehicle looks CLEARLY non-functional or used as shelter"
         ],
-        "location": "Parked on streets, alleys, vacant lots",
+        "location": "Streets, alleys, vacant lots, under bridges - NOT parking lots with clean cars",
         "not_this": [
-            "Regularly parked vehicles",
-            "Cars actively in use",
-            "Delivery or commercial vehicles",
-            "Temporarily parked clean vehicles",
-            "Vehicles with people nearby/inside"
+            "⚠️ NEVER detect regular parked vehicles - even if stationary",
+            "⚠️ Clean vehicles in parking lots or driveways",
+            "⚠️ Cars with shiny paint or clear windows",
+            "⚠️ Vehicles with inflated tires and no visible damage",
+            "⚠️ Commercial vehicles, delivery trucks, work vans",
+            "⚠️ Cars that look functional and roadworthy",
+            "⚠️ Temporarily parked cars (even if dusty from weather)",
+            "⚠️ Vehicles in organized parking areas",
+            "⚠️ Cars with visible license plates and registration",
+            "IMPORTANT: If vehicle looks like it could drive away, DO NOT detect it!"
         ]
     },
 
