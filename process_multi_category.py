@@ -139,7 +139,12 @@ def process_video_multi_detection(
             # Qwen3 detects ALL categories, SAM3 segments each
             result = detector.detect_infrastructure(pil_image)
 
-            if result['num_detections'] == 0:
+            # Handle None or invalid result
+            if result is None:
+                logger.error(f"Detection returned None for frame {frame_idx}")
+                continue
+
+            if result.get('num_detections', 0) == 0:
                 continue
 
             # Group detections by category

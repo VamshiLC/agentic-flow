@@ -110,7 +110,16 @@ class InfrastructureDetectionAgentHF:
         logger.debug("Step 1: Qwen3-VL detection...")
         qwen_result = self.qwen_detector.detect_infrastructure(image)
 
-        if not use_sam3 or qwen_result['num_detections'] == 0:
+        # Handle None or invalid result
+        if qwen_result is None:
+            logger.error("Qwen detection returned None")
+            return {
+                'detections': [],
+                'num_detections': 0,
+                'has_masks': False
+            }
+
+        if not use_sam3 or qwen_result.get('num_detections', 0) == 0:
             # No SAM3 segmentation needed/possible
             return {
                 **qwen_result,
@@ -121,17 +130,17 @@ class InfrastructureDetectionAgentHF:
         logger.debug(f"Step 2: SAM3 segmentation for {qwen_result['num_detections']} detections...")
 
         enhanced_detections = []
-        for det in qwen_result['detections']:
+        for det in qwen_result.get('detections', []):
             # Use Qwen's description to guide SAM3
             try:
-                mask = self._segment_with_sam3(
-                    image,
-                    query=det.get('description', det['label'])
-                )
+                label = det.get('label', 'unknown')
+                description = det.get('description', label)
+                mask = self._segment_with_sam3(image, query=description)
                 det['mask'] = mask
                 det['has_mask'] = True
             except Exception as e:
-                logger.warning(f"SAM3 segmentation failed for {det['label']}: {e}")
+                label = det.get('label', 'unknown')
+                logger.warning(f"SAM3 segmentation failed for {label}: {e}")
                 det['mask'] = None
                 det['has_mask'] = False
 
