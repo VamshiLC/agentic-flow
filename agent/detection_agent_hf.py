@@ -7,14 +7,16 @@ This implements the agentic flow where:
 
 No vLLM server required - uses Hugging Face Transformers directly.
 """
+import re
 import torch
 import numpy as np
 from PIL import Image
-from typing import List, Dict, Optional, Union
+from typing import List, Dict, Optional, Union, Tuple
 import logging
 
 from models.qwen_direct_loader import Qwen3VLDirectDetector
 from models.sam3_loader import load_sam3_model
+from prompts.category_prompts import build_detailed_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -106,31 +108,49 @@ class InfrastructureDetectionAgentHF:
                 'has_masks': bool
             }
         """
-        # Step 1: Qwen detects infrastructure issues
+        # Convert to PIL if needed
+        if isinstance(image, str):
+            image = Image.open(image).convert('RGB')
+
+        # Step 1: Build detection prompt
+        if self.categories is None:
+            from detector_unified import INFRASTRUCTURE_CATEGORIES
+            categories = list(INFRASTRUCTURE_CATEGORIES.keys())
+        else:
+            categories = self.categories
+
+        prompt = build_detailed_prompt(categories)
+
+        # Step 2: Qwen detects infrastructure issues
         logger.debug("Step 1: Qwen3-VL detection...")
-        qwen_result = self.qwen_detector.detect_infrastructure(image)
+        qwen_result = self.qwen_detector.detect(image, prompt)
 
         # Handle None or invalid result
-        if qwen_result is None:
-            logger.error("Qwen detection returned None")
+        if qwen_result is None or not qwen_result.get('success', False):
+            logger.error("Qwen detection failed")
             return {
                 'detections': [],
                 'num_detections': 0,
                 'has_masks': False
             }
 
-        if not use_sam3 or qwen_result.get('num_detections', 0) == 0:
+        # Step 3: Parse text response to extract detections
+        text_response = qwen_result.get('text', '')
+        detections = self._parse_detections(text_response, image.size)
+
+        if not use_sam3 or len(detections) == 0:
             # No SAM3 segmentation needed/possible
             return {
-                **qwen_result,
+                'detections': detections,
+                'num_detections': len(detections),
                 'has_masks': False
             }
 
-        # Step 2: For each detection, get SAM3 segmentation mask
-        logger.debug(f"Step 2: SAM3 segmentation for {qwen_result['num_detections']} detections...")
+        # Step 4: For each detection, get SAM3 segmentation mask
+        logger.debug(f"Step 2: SAM3 segmentation for {len(detections)} detections...")
 
         enhanced_detections = []
-        for det in qwen_result.get('detections', []):
+        for det in detections:
             # Use Qwen's description to guide SAM3
             try:
                 label = det.get('label', 'unknown')
@@ -151,6 +171,114 @@ class InfrastructureDetectionAgentHF:
             'num_detections': len(enhanced_detections),
             'has_masks': True
         }
+
+    def _parse_detections(
+        self,
+        response: str,
+        image_size: Tuple[int, int],
+        confidence_threshold: float = 0.3
+    ) -> List[Dict]:
+        """
+        Parse detection results from Qwen text response.
+
+        Args:
+            response: Text response from Qwen model
+            image_size: (width, height) of image
+            confidence_threshold: Minimum confidence
+
+        Returns:
+            list: List of detection dicts with bbox, label, confidence
+        """
+        from detector_unified import DEFECT_COLORS
+
+        detections = []
+        width, height = image_size
+
+        if "no defects detected" in response.lower():
+            return detections
+
+        # Pattern: Defect: <type>, Box: [x1, y1, x2, y2]
+        pattern = r'Defect:\s*([^,\n]+),\s*Box:\s*\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\]'
+        matches = re.findall(pattern, response, re.IGNORECASE)
+
+        for match in matches:
+            try:
+                label = self._normalize_label(match[0].strip().lower())
+
+                # Convert normalized 0-1000 coords to pixel coords
+                x1 = int(float(match[1]) * width / 1000)
+                y1 = int(float(match[2]) * height / 1000)
+                x2 = int(float(match[3]) * width / 1000)
+                y2 = int(float(match[4]) * height / 1000)
+
+                # Clamp to image bounds
+                x1 = max(0, min(x1, width))
+                y1 = max(0, min(y1, height))
+                x2 = max(0, min(x2, width))
+                y2 = max(0, min(y2, height))
+
+                # Validate bbox
+                if x2 > x1 and y2 > y1:
+                    color = DEFECT_COLORS.get(label, (0, 255, 0))
+
+                    detection = {
+                        "label": label,
+                        "category": label,
+                        "bbox": [x1, y1, x2, y2],
+                        "confidence": 0.8,
+                        "color": color,
+                        "description": label  # For SAM3 segmentation
+                    }
+
+                    detections.append(detection)
+
+            except (ValueError, IndexError) as e:
+                logger.warning(f"Failed to parse detection: {match} ({e})")
+                continue
+
+        return detections
+
+    def _normalize_label(self, label: str) -> str:
+        """Normalize detected label to match predefined categories."""
+        from detector_unified import INFRASTRUCTURE_CATEGORIES
+
+        label = label.lower().strip()
+
+        # Direct match
+        if label in INFRASTRUCTURE_CATEGORIES:
+            return label
+
+        # Keyword matching
+        label_mappings = {
+            "pothole": "potholes",
+            "hole": "potholes",
+            "alligator crack": "alligator_cracks",
+            "alligator": "alligator_cracks",
+            "longitudinal crack": "longitudinal_cracks",
+            "longitudinal": "longitudinal_cracks",
+            "transverse crack": "transverse_cracks",
+            "transverse": "transverse_cracks",
+            "vehicle": "abandoned_vehicle",
+            "car": "abandoned_vehicle",
+            "encampment": "homeless_encampment",
+            "tent": "homeless_encampment",
+            "homeless": "homeless_person",
+            "person": "homeless_person",
+            "manhole": "manholes",
+            "paint": "damaged_paint",
+            "crosswalk": "damaged_crosswalks",
+            "trash": "dumped_trash",
+            "sign": "street_signs",
+            "light": "traffic_lights",
+            "tyre": "tyre_marks",
+            "tire": "tyre_marks"
+        }
+
+        for keyword, category in label_mappings.items():
+            if keyword in label:
+                return category
+
+        return label
 
     def _segment_with_sam3(
         self,
