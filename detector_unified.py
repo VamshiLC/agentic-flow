@@ -199,6 +199,11 @@ class UnifiedInfrastructureDetector:
                 "num_detections": len(detections)
             }
 
+        elif self.mode == "agent-hf":
+            # Use Hugging Face agentic mode (Qwen3 + SAM3)
+            result = self.detector.detect_infrastructure(image, use_sam3=True)
+            return result
+
         elif self.mode == "agent":
             # Use agent mode (autonomous detection)
             result = self.detector.process_frame(image)
