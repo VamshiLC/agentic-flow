@@ -156,8 +156,21 @@ class InfrastructureDetectionAgentHF:
                 label = det.get('label', 'unknown')
                 description = det.get('description', label)
                 mask = self._segment_with_sam3(image, query=description)
-                det['mask'] = mask
-                det['has_mask'] = True
+
+                # Convert mask to JSON-serializable format
+                if mask is not None:
+                    # Convert torch.Tensor to numpy if needed
+                    if torch.is_tensor(mask):
+                        mask = mask.cpu().numpy()
+                    # Convert numpy to list for JSON serialization
+                    if isinstance(mask, np.ndarray):
+                        det['mask'] = mask.tolist()
+                    else:
+                        det['mask'] = mask
+                    det['has_mask'] = True
+                else:
+                    det['mask'] = None
+                    det['has_mask'] = False
             except Exception as e:
                 label = det.get('label', 'unknown')
                 logger.warning(f"SAM3 segmentation failed for {label}: {e}")
@@ -221,13 +234,16 @@ class InfrastructureDetectionAgentHF:
                 if x2 > x1 and y2 > y1:
                     color = DEFECT_COLORS.get(label, (0, 255, 0))
 
+                    # Create detailed SAM3 prompt
+                    sam3_description = self._create_sam3_prompt(label)
+
                     detection = {
                         "label": label,
                         "category": label,
                         "bbox": [x1, y1, x2, y2],
                         "confidence": 0.8,
                         "color": color,
-                        "description": label  # For SAM3 segmentation
+                        "description": sam3_description  # Better prompt for SAM3
                     }
 
                     detections.append(detection)
@@ -279,6 +295,32 @@ class InfrastructureDetectionAgentHF:
                 return category
 
         return label
+
+    def _create_sam3_prompt(self, category: str) -> str:
+        """
+        Create detailed SAM3 prompt from category.
+
+        SAM3 needs descriptive prompts to segment accurately.
+        Simple category names like "potholes" are too vague.
+        """
+        prompts = {
+            "potholes": "a hole or depression in the road pavement surface",
+            "alligator_cracks": "a network of interconnected cracks forming a pattern on the pavement",
+            "longitudinal_cracks": "a crack running parallel along the direction of the road",
+            "transverse_cracks": "a crack running across the width of the road perpendicular to traffic",
+            "road_surface_damage": "deteriorated or damaged road pavement surface",
+            "abandoned_vehicle": "a damaged, broken down, or abandoned vehicle",
+            "homeless_encampment": "a tent, tarp, or makeshift shelter structure",
+            "homeless_person": "a person with belongings or bedding in a public area",
+            "manholes": "a round or square metal manhole cover on the road",
+            "damaged_paint": "faded, worn, or deteriorated road paint markings",
+            "damaged_crosswalks": "faded or worn pedestrian crosswalk stripes on the road",
+            "dumped_trash": "trash, garbage, debris, or discarded items",
+            "street_signs": "a traffic sign or road sign mounted on a pole",
+            "traffic_lights": "a traffic signal light with colored lights for vehicles",
+            "tyre_marks": "dark rubber tire marks or skid marks on the pavement"
+        }
+        return prompts.get(category, category)
 
     def _segment_with_sam3(
         self,

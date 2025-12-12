@@ -170,13 +170,30 @@ def process_video_multi_detection(
                 annotated_bgr = cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR)
                 cv2.imwrite(str(annotated_path), annotated_bgr)
 
+                # Clean detections for JSON serialization
+                json_safe_detections = []
+                for det in detections:
+                    safe_det = det.copy()
+                    # Skip masks in JSON (they're too large and already handled)
+                    if 'mask' in safe_det:
+                        safe_det.pop('mask', None)
+                    if 'has_mask' in safe_det:
+                        safe_det['has_mask'] = bool(safe_det['has_mask'])
+                    # Ensure bbox is list of ints
+                    if 'bbox' in safe_det:
+                        safe_det['bbox'] = [int(x) for x in safe_det['bbox']]
+                    # Ensure confidence is float
+                    if 'confidence' in safe_det:
+                        safe_det['confidence'] = float(safe_det['confidence'])
+                    json_safe_detections.append(safe_det)
+
                 # Store detection data
                 category_data[category].append({
                     "frame_index": frame_idx,
                     "timestamp": frame_idx / video_fps,
                     "frame_path": str(frame_path),
                     "annotated_path": str(annotated_path),
-                    "detections": detections
+                    "detections": json_safe_detections
                 })
 
                 category_counts[category] += 1
