@@ -1,0 +1,57 @@
+# ===== Core ML Dependencies =====
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+
+# ===== Vision Processing =====
+pillow>=10.0.0
+opencv-python>=4.8.0
+
+# ===== SAM3 (install from source first) =====
+# Installation instructions:
+# git clone https://github.com/facebookresearch/sam3.git
+# cd sam3
+# pip install -e .
+#
+# SAM3 provides the segmentation model and agent utilities
+
+# ===== Qwen3-VL Dependencies =====
+transformers>=4.40.0  # Required for Qwen3-VL-4B-Instruct
+accelerate>=0.20.0    # For model loading optimization
+timm>=0.9.0           # Vision model dependencies
+einops>=0.7.0         # Tensor operations
+
+# ===== vLLM (install in separate conda env recommended) =====
+# Installation instructions:
+# conda create -n vllm python=3.12
+# conda activate vllm
+# pip install vllm --extra-index-url https://download.pytorch.org/whl/cu128
+#
+# To start vLLM server:
+# vllm serve Qwen/Qwen3-VL-4B-Instruct \
+#     --tensor-parallel-size 1 \
+#     --allowed-local-media-path / \
+#     --enforce-eager \
+#     --port 8001
+
+# ===== API Client Dependencies =====
+openai>=1.0.0         # OpenAI-compatible API client
+requests>=2.31.0      # HTTP requests
+httpx>=0.25.0         # Async HTTP client
+
+# ===== Optional: FastAPI Server =====
+# (not currently used, but available for future API server)
+fastapi>=0.104.0
+uvicorn>=0.24.0
+pydantic>=2.0.0
+
+# ===== Utilities =====
+python-dotenv>=1.0.0  # Environment variable management
+tqdm>=4.66.0          # Progress bars
+matplotlib>=3.7.0     # Optional: visualization
+seaborn>=0.12.0       # Optional: visualization
+
+# ===== Development Tools (Optional) =====
+ipython>=8.12.0
+jupyter>=1.0.0
+ipywidgets>=8.0.0
