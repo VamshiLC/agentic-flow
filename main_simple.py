@@ -327,7 +327,7 @@ def process_video(
             "video_fps": video_fps,
             "processed_fps": target_fps,
             "total_frames": total_frames,
-            "processed_frames": processed_count,
+            "processed_frames": len(all_detections),
             "frame_detections": all_detections
         }, f, indent=2)
 
@@ -339,7 +339,7 @@ def process_video(
 
     print(f"\nSummary:")
     print(f"  Total detections: {total_dets}")
-    print(f"  Frames with detections: {frames_with_dets}/{processed_count}")
+    print(f"  Frames with detections: {frames_with_dets}/{len(all_detections)}")
 
 
 def main():
