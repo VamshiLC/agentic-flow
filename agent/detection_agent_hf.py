@@ -47,8 +47,8 @@ class InfrastructureDetectionAgentHF:
         device: Optional[str] = None,
         use_quantization: bool = False,
         low_memory: bool = False,
-        sam3_confidence: float = 0.3,
-        max_turns: int = 50,  # Official SAM3 uses up to 100 rounds
+        sam3_confidence: float = 0.25,
+        max_turns: int = 10,  # Fast detection
         debug: bool = False
     ):
         """
@@ -142,15 +142,16 @@ class InfrastructureDetectionAgentHF:
         if user_query is None:
             user_query = "Analyze this road image and detect all infrastructure issues."
 
-        # Create agent config - TRUE AGENTIC mode (same as official SAM3 agent)
+        # Create agent config - FAST + COMPREHENSIVE mode
+        # Searches ALL categories with SAM3 directly (no slow LLM loops)
         config = AgentConfig(
             max_turns=self.max_turns,
             categories=self.categories,
             debug=self.debug,
             debug_dir="debug",
-            force_all_categories=False,  # Let LLM decide what to search (smart)
-            validate_with_llm=False,  # Validation happens in agentic loop
-            confidence_threshold=0.3,
+            force_all_categories=True,  # Search ALL categories with SAM3
+            validate_with_llm=False,  # No slow LLM validation
+            confidence_threshold=0.25,  # Catch more detections
         )
 
         # Create and run agent
