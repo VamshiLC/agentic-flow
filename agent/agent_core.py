@@ -39,16 +39,17 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AgentConfig:
-    """Configuration for the agent."""
-    max_turns: int = 25  # Enough turns to check all categories
-    max_retries: int = 2  # Max retries per turn on parse errors
+    """Configuration for the agent - matches official SAM3 agent."""
+    max_turns: int = 50  # Official SAM3 uses up to 100 rounds
+    max_retries: int = 3  # Retry on parse errors
     categories: Optional[List[str]] = None  # Categories to detect
     debug: bool = False  # Enable debug logging
     debug_dir: str = "debug"  # Debug output directory
-    prune_after_turns: int = 15  # Prune messages after N turns
-    auto_exit_on_masks: bool = False  # Don't auto exit - let LLM decide
-    force_all_categories: bool = True  # Search ALL categories with SAM3
-    validate_with_llm: bool = True  # Use LLM to validate/reject false positives
+    prune_after_turns: int = 20  # Prune messages after N turns
+    auto_exit_on_masks: bool = False  # Let LLM decide when done
+    force_all_categories: bool = False  # TRUE AGENTIC - LLM drives the search
+    validate_with_llm: bool = False  # Validation in agentic loop
+    confidence_threshold: float = 0.3  # SAM3 confidence threshold
 
 
 @dataclass
@@ -178,10 +179,14 @@ class InfrastructureDetectionAgentCore:
         masks = tool_executor.get_all_masks()
         logger.info(f"=== TOTAL: {len(masks)} masks from {len(found_categories)} categories ===")
 
-        # Optional: LLM validation to reject false positives
-        if self.config.validate_with_llm and masks:
-            masks = self._validate_masks_with_llm(image, masks, tool_executor)
-            logger.info(f"After LLM validation: {len(masks)} masks remaining")
+        # Filter by confidence threshold (faster than LLM validation)
+        if masks:
+            before_count = len(masks)
+            masks = [m for m in masks if m.score >= self.config.confidence_threshold]
+            filtered_count = before_count - len(masks)
+            if filtered_count > 0:
+                logger.info(f"Filtered {filtered_count} low-confidence masks (threshold: {self.config.confidence_threshold})")
+            logger.info(f"Keeping {len(masks)} high-confidence masks")
 
         # Build final detections
         if masks:

@@ -41,14 +41,14 @@ class InfrastructureDetectionAgentHF:
 
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen3-VL-4B-Instruct",
+        model_name: str = "Qwen/Qwen3-VL-8B-Thinking",  # Same as official SAM3 agent
         sam3_processor=None,
         categories: Optional[List[str]] = None,
         device: Optional[str] = None,
         use_quantization: bool = False,
         low_memory: bool = False,
         sam3_confidence: float = 0.3,
-        max_turns: int = 15,  # Enough for all categories
+        max_turns: int = 50,  # Official SAM3 uses up to 100 rounds
         debug: bool = False
     ):
         """
@@ -142,14 +142,15 @@ class InfrastructureDetectionAgentHF:
         if user_query is None:
             user_query = "Analyze this road image and detect all infrastructure issues."
 
-        # Create agent config - HYBRID mode: search ALL categories, validate with LLM
+        # Create agent config - TRUE AGENTIC mode (same as official SAM3 agent)
         config = AgentConfig(
             max_turns=self.max_turns,
             categories=self.categories,
             debug=self.debug,
             debug_dir="debug",
-            force_all_categories=True,  # Search ALL 22 categories with SAM3
-            validate_with_llm=True,  # Use LLM to reject false positives
+            force_all_categories=False,  # Let LLM decide what to search (smart)
+            validate_with_llm=False,  # Validation happens in agentic loop
+            confidence_threshold=0.3,
         )
 
         # Create and run agent

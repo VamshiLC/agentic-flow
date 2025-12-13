@@ -26,7 +26,7 @@ class Qwen3VLDirectDetector:
 
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen3-VL-4B-Instruct",
+        model_name: str = "Qwen/Qwen3-VL-8B-Thinking",  # Same as official SAM3 agent
         device: Optional[str] = None,
         use_quantization: bool = False,
         low_memory: bool = False
