@@ -40,7 +40,7 @@ class InfrastructureDetectionAgentHF:
         device: Optional[str] = None,
         use_quantization: bool = False,
         low_memory: bool = False,
-        sam3_confidence: float = 0.5
+        sam3_confidence: float = 0.3  # Lower threshold to accept more masks
     ):
         """
         Initialize the agentic detector.
@@ -151,11 +151,18 @@ class InfrastructureDetectionAgentHF:
 
         enhanced_detections = []
         for det in detections:
-            # Use Qwen's description to guide SAM3
+            # Use Qwen's bbox (preferred) and description (fallback) to guide SAM3
             try:
                 label = det.get('label', 'unknown')
                 description = det.get('description', label)
-                mask = self._segment_with_sam3(image, query=description)
+                bbox = det.get('bbox', None)  # Get bounding box from detection
+
+                # Pass bbox to SAM3 (preferred method for accurate segmentation)
+                mask = self._segment_with_sam3(
+                    image,
+                    query=description,  # Fallback if bbox fails
+                    bbox=bbox           # Primary method
+                )
 
                 # Convert mask to JSON-serializable format
                 if mask is not None:
@@ -383,14 +390,16 @@ class InfrastructureDetectionAgentHF:
     def _segment_with_sam3(
         self,
         image: Union[Image.Image, str],
-        query: str
+        query: str = None,
+        bbox: List[int] = None
     ) -> Optional[np.ndarray]:
         """
-        Segment an object using SAM3 based on a text query.
+        Segment an object using SAM3 with geometric prompt (preferred) or text prompt.
 
         Args:
             image: PIL Image or path
-            query: Text description of what to segment
+            query: Text description of what to segment (fallback)
+            bbox: Bounding box [x1, y1, x2, y2] in pixel coordinates (preferred)
 
         Returns:
             np.ndarray: Segmentation mask or None if failed
@@ -400,31 +409,61 @@ class InfrastructureDetectionAgentHF:
             if isinstance(image, str):
                 image = Image.open(image).convert('RGB')
 
-            # CORRECT SAM3 API usage
+            # Get image dimensions for normalization
+            img_width, img_height = image.size
+
             # Step 1: Set the image and get inference state
             inference_state = self.sam3_processor.set_image(image)
 
-            # Step 2: Set text prompt and get output
-            output = self.sam3_processor.set_text_prompt(
-                state=inference_state,
-                prompt=query
-            )
+            # PRIORITY 1: Use bounding box if available (more accurate)
+            if bbox is not None and len(bbox) == 4:
+                x1, y1, x2, y2 = bbox
 
-            # Step 3: Extract masks from output
-            if isinstance(output, dict) and 'masks' in output:
-                masks = output['masks']
-                # Return first mask if multiple masks returned
-                if len(masks) > 0:
-                    return masks[0]  # Shape: (H, W) boolean array
+                # Convert [x1, y1, x2, y2] to [center_x, center_y, width, height] normalized
+                center_x = ((x1 + x2) / 2) / img_width
+                center_y = ((y1 + y2) / 2) / img_height
+                width = (x2 - x1) / img_width
+                height = (y2 - y1) / img_height
+
+                # SAM3 expects: [center_x, center_y, width, height] normalized to [0, 1]
+                box_normalized = [center_x, center_y, width, height]
+
+                # Use geometric prompt (box-based segmentation)
+                self.sam3_processor.add_geometric_prompt(
+                    box=box_normalized,
+                    label=True,  # True = positive prompt (include this region)
+                    state=inference_state
+                )
+
+                # Retrieve results from state
+                masks = inference_state.get('masks', [])
+
+            # FALLBACK: Use text prompt
+            elif query is not None:
+                output = self.sam3_processor.set_text_prompt(
+                    state=inference_state,
+                    prompt=query
+                )
+                # Extract masks from output
+                if isinstance(output, dict) and 'masks' in output:
+                    masks = output['masks']
                 else:
-                    logger.warning(f"No masks returned for query: {query}")
+                    logger.warning(f"Unexpected SAM3 output format: {type(output)}")
                     return None
             else:
-                logger.warning(f"Unexpected SAM3 output format: {type(output)}")
+                logger.error("SAM3 called without bbox or query")
+                return None
+
+            # Extract masks with better logging
+            if masks is not None and len(masks) > 0:
+                logger.debug(f"SAM3 returned {len(masks)} masks for bbox={bbox}")
+                return masks[0]  # Return highest confidence mask
+            else:
+                logger.warning(f"SAM3 returned 0 masks for bbox={bbox}, query={query}")
                 return None
 
         except Exception as e:
-            logger.error(f"SAM3 segmentation error: {e}")
+            logger.error(f"SAM3 segmentation error: {e}", exc_info=True)
             return None
 
     def detect_infrastructure_batch(
