@@ -37,12 +37,13 @@ logger = logging.getLogger(__name__)
 @dataclass
 class AgentConfig:
     """Configuration for the agent."""
-    max_turns: int = 50  # Maximum agentic loop iterations
-    max_retries: int = 3  # Max retries per turn on parse errors
+    max_turns: int = 10  # Maximum agentic loop iterations (reduced from 50)
+    max_retries: int = 2  # Max retries per turn on parse errors
     categories: Optional[List[str]] = None  # Categories to detect
     debug: bool = False  # Enable debug logging
     debug_dir: str = "debug"  # Debug output directory
-    prune_after_turns: int = 10  # Prune messages after N turns
+    prune_after_turns: int = 5  # Prune messages after N turns
+    auto_exit_on_masks: bool = True  # Auto exit when masks are found
 
 
 @dataclass
@@ -204,6 +205,38 @@ class InfrastructureDetectionAgentCore:
                 final_result = result
                 break
 
+            # Auto-exit: If we found masks and this is a segment_phrase call,
+            # check if we should auto-complete
+            if self.config.auto_exit_on_masks and tool_name == "segment_phrase":
+                masks = tool_executor.get_all_masks()
+                if len(masks) > 0 and turn >= 3:
+                    # We have masks and have done at least 3 turns - auto complete
+                    logger.info(f"Auto-exit: Found {len(masks)} masks after {turn} turns")
+
+                    # Build final result from collected masks
+                    detections = [
+                        {
+                            "mask_id": m.mask_id,
+                            "category": m.category,
+                            "severity": tool_executor._category_to_severity(m.category),
+                            "confidence": m.score,
+                            "bbox": m.bbox,
+                            "mask": m.mask,
+                        }
+                        for m in masks
+                    ]
+                    final_image = tool_executor._render_masks(masks)
+
+                    final_result = ToolResult(
+                        success=True,
+                        tool_name="auto_complete",
+                        message=f"Auto-completed: Found {len(masks)} infrastructure issues",
+                        data={"detections": detections, "num_detections": len(detections)},
+                        image=final_image,
+                        should_exit=True
+                    )
+                    break
+
         # Handle timeout (max turns reached)
         if final_result is None:
             logger.warning(f"Agent reached max turns ({self.config.max_turns})")
@@ -214,8 +247,8 @@ class InfrastructureDetectionAgentCore:
                 detections = [
                     {
                         "mask_id": m.mask_id,
-                        "category": "unknown",
-                        "severity": "low",
+                        "category": m.category,  # Use stored category
+                        "severity": tool_executor._category_to_severity(m.category),
                         "confidence": m.score,
                         "bbox": m.bbox,
                         "mask": m.mask,

@@ -48,7 +48,7 @@ class InfrastructureDetectionAgentHF:
         use_quantization: bool = False,
         low_memory: bool = False,
         sam3_confidence: float = 0.3,
-        max_turns: int = 50,
+        max_turns: int = 10,  # Reduced from 50
         debug: bool = False
     ):
         """
@@ -79,7 +79,7 @@ class InfrastructureDetectionAgentHF:
         print(f"  Model: {model_name}")
         print(f"  Device: {self.device}")
         print(f"  SAM3 confidence: {sam3_confidence}")
-        print(f"  Max turns: {max_turns}")
+        print(f"  Max turns: {max_turns} (auto-exit when masks found)")
         print(f"  Debug mode: {debug}")
 
         # Load Qwen3-VL detector (the "brain")

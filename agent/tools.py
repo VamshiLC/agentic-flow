@@ -39,6 +39,8 @@ class MaskData:
     score: float
     bbox: List[int]  # [x1, y1, x2, y2]
     rle: Optional[str] = None
+    category: str = "unknown"  # Category/prompt used to find this mask
+    text_prompt: str = ""  # Original text prompt used
 
 
 class ToolExecutor:
@@ -177,10 +179,13 @@ class ToolExecutor:
                     data={"num_masks": 0, "prompt": text_prompt},
                 )
 
-            # Add masks to storage with IDs
+            # Add masks to storage with IDs and category
             start_id = len(self.masks) + 1
+            category = self._prompt_to_category(text_prompt)
             for i, mask_data in enumerate(masks):
                 mask_data.mask_id = start_id + i
+                mask_data.category = category
+                mask_data.text_prompt = text_prompt
                 self.masks.append(mask_data)
 
             # Render masks on image
@@ -278,15 +283,27 @@ class ToolExecutor:
 
         # Build final detections with mask data
         final_detections = []
-        for det in detections:
-            mask_id = det.get("mask_id")
-            if mask_id in valid_ids:
-                mask_data = next(m for m in self.masks if m.mask_id == mask_id)
+
+        # Create a lookup from detections list
+        det_lookup = {d.get("mask_id"): d for d in detections if d.get("mask_id")}
+
+        for mask_id in mask_ids:
+            mask_data = next((m for m in self.masks if m.mask_id == mask_id), None)
+            if mask_data:
+                # Get detection info from LLM if provided, otherwise use stored category
+                det_info = det_lookup.get(mask_id, {})
+
+                # Use stored category from mask, fallback to LLM provided or "unknown"
+                category = mask_data.category if mask_data.category != "unknown" else det_info.get("category", "unknown")
+
+                # Determine severity based on category
+                severity = det_info.get("severity") or self._category_to_severity(category)
+
                 final_detections.append({
                     "mask_id": mask_id,
-                    "category": det.get("category", "unknown"),
-                    "severity": det.get("severity", "low"),
-                    "description": det.get("description", ""),
+                    "category": category,
+                    "severity": severity,
+                    "description": det_info.get("description", f"{category} detected"),
                     "confidence": mask_data.score,
                     "bbox": mask_data.bbox,
                     "mask": mask_data.mask,
@@ -507,7 +524,10 @@ class ToolExecutor:
             bbox = mask_data.bbox
             if bbox and len(bbox) == 4:
                 x1, y1, x2, y2 = bbox
-                label = f"{mask_data.mask_id}"
+
+                # Show category name instead of just ID
+                category_display = mask_data.category.replace("_", " ").title()
+                label = f"{mask_data.mask_id}: {category_display}"
 
                 # Draw label background
                 text_bbox = draw.textbbox((x1, y1 - 25), label, font=font)
@@ -521,6 +541,120 @@ class ToolExecutor:
                 draw.rectangle([x1, y1, x2, y2], outline=color, width=2)
 
         return image
+
+    def _category_to_severity(self, category: str) -> str:
+        """Map category to severity level."""
+        critical = ["potholes", "alligator_cracks"]
+        medium = ["abandoned_vehicle", "homeless_encampment", "homeless_person", "road_surface_damage"]
+
+        if category in critical:
+            return "critical"
+        elif category in medium:
+            return "medium"
+        else:
+            return "low"
+
+    def _prompt_to_category(self, text_prompt: str) -> str:
+        """
+        Convert a text prompt to a category name.
+
+        Maps prompts like "pothole", "hole in road" -> "potholes"
+        """
+        prompt_lower = text_prompt.lower().strip()
+
+        # Direct mappings
+        category_mappings = {
+            # Potholes
+            "pothole": "potholes",
+            "potholes": "potholes",
+            "hole": "potholes",
+            "hole in road": "potholes",
+            "road hole": "potholes",
+
+            # Cracks
+            "alligator crack": "alligator_cracks",
+            "alligator cracks": "alligator_cracks",
+            "alligator": "alligator_cracks",
+            "web crack": "alligator_cracks",
+
+            "longitudinal crack": "longitudinal_cracks",
+            "longitudinal cracks": "longitudinal_cracks",
+            "long crack": "longitudinal_cracks",
+
+            "transverse crack": "transverse_cracks",
+            "transverse cracks": "transverse_cracks",
+            "cross crack": "transverse_cracks",
+
+            "crack": "longitudinal_cracks",  # Default crack type
+            "cracks": "longitudinal_cracks",
+
+            # Road damage
+            "road damage": "road_surface_damage",
+            "road surface damage": "road_surface_damage",
+            "pavement damage": "road_surface_damage",
+
+            # Vehicles
+            "abandoned vehicle": "abandoned_vehicle",
+            "abandoned car": "abandoned_vehicle",
+            "vehicle": "abandoned_vehicle",
+            "car": "abandoned_vehicle",
+
+            # Homeless
+            "homeless encampment": "homeless_encampment",
+            "encampment": "homeless_encampment",
+            "tent": "homeless_encampment",
+            "homeless person": "homeless_person",
+            "homeless": "homeless_person",
+
+            # Infrastructure
+            "manhole": "manholes",
+            "manholes": "manholes",
+            "manhole cover": "manholes",
+
+            "damaged paint": "damaged_paint",
+            "road marking": "damaged_paint",
+            "road paint": "damaged_paint",
+            "faded paint": "damaged_paint",
+
+            "crosswalk": "damaged_crosswalks",
+            "damaged crosswalk": "damaged_crosswalks",
+            "crosswalks": "damaged_crosswalks",
+
+            "trash": "dumped_trash",
+            "dumped trash": "dumped_trash",
+            "garbage": "dumped_trash",
+            "debris": "dumped_trash",
+            "litter": "dumped_trash",
+
+            "street sign": "street_signs",
+            "street signs": "street_signs",
+            "sign": "street_signs",
+            "traffic sign": "street_signs",
+
+            "traffic light": "traffic_lights",
+            "traffic lights": "traffic_lights",
+            "signal": "traffic_lights",
+            "stoplight": "traffic_lights",
+
+            "tyre mark": "tyre_marks",
+            "tyre marks": "tyre_marks",
+            "tire mark": "tyre_marks",
+            "tire marks": "tyre_marks",
+            "skid mark": "tyre_marks",
+            "skid marks": "tyre_marks",
+        }
+
+        # Check direct match
+        if prompt_lower in category_mappings:
+            return category_mappings[prompt_lower]
+
+        # Check partial match
+        for key, category in category_mappings.items():
+            if key in prompt_lower or prompt_lower in key:
+                return category
+
+        # Return the prompt itself as category if no match
+        return prompt_lower.replace(" ", "_")
 
     def get_all_masks(self) -> List[MaskData]:
         """Get all stored masks."""
