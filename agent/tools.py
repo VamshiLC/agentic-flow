@@ -215,10 +215,15 @@ class ToolExecutor:
 
     def _examine_each_mask(self, params: Dict[str, Any]) -> ToolResult:
         """
-        Execute examine_each_mask tool - render each mask individually.
+        Execute examine_each_mask tool - render each mask for LLM validation.
+
+        This is the KEY validation step from the official SAM3 agent:
+        - Shows each mask overlaid on original image
+        - LLM must Accept or Reject each mask
+        - Shadows and false positives get rejected
 
         Returns:
-            ToolResult with grid of individual masks
+            ToolResult with individual mask images for validation
         """
         if not self.masks:
             return ToolResult(
@@ -227,26 +232,68 @@ class ToolExecutor:
                 message="No masks to examine. Call segment_phrase first.",
             )
 
-        # Create grid of individual mask views
+        # Create individual mask views for validation
         individual_images = []
+        mask_info = []
+
         for mask_data in self.masks:
+            # Render this single mask on original image
             img = self._render_single_mask(mask_data)
             individual_images.append((mask_data.mask_id, img))
+
+            mask_info.append({
+                "mask_id": mask_data.mask_id,
+                "category": mask_data.category,
+                "confidence": mask_data.score,
+                "bbox": mask_data.bbox,
+            })
 
         # Create combined grid image
         grid_image = self._create_mask_grid(individual_images)
 
+        # Store masks pending validation
+        self.masks_pending_validation = list(self.masks)
+
+        validation_prompt = f"""
+Examine each mask carefully. For EACH mask, decide:
+- **Accept**: Mask correctly shows the object (real pothole, real crack, etc.)
+- **Reject**: Mask shows something wrong (shadow, reflection, false positive)
+
+Masks to validate:
+{self._format_mask_list_for_validation(mask_info)}
+
+Respond with your verdict for each mask:
+<verdict>
+mask_1: Accept/Reject - reason
+mask_2: Accept/Reject - reason
+...
+</verdict>
+
+Then call select_masks_and_return with ONLY the accepted mask IDs.
+"""
+
         return ToolResult(
             success=True,
             tool_name="examine_each_mask",
-            message=f"Rendered {len(self.masks)} masks individually. Review each mask to determine which are correct.",
+            message=validation_prompt,
             data={
                 "num_masks": len(self.masks),
                 "mask_ids": [m.mask_id for m in self.masks],
-                "scores": [m.score for m in self.masks],
+                "masks_info": mask_info,
+                "requires_validation": True,
             },
             image=grid_image,
         )
+
+    def _format_mask_list_for_validation(self, mask_info: List[Dict]) -> str:
+        """Format mask info for LLM validation prompt."""
+        lines = []
+        for info in mask_info:
+            lines.append(
+                f"- Mask {info['mask_id']}: {info['category']} "
+                f"(confidence: {info['confidence']:.2f}, bbox: {info['bbox']})"
+            )
+        return "\n".join(lines)
 
     def _select_masks_and_return(self, params: Dict[str, Any]) -> ToolResult:
         """
@@ -659,6 +706,18 @@ class ToolExecutor:
     def get_all_masks(self) -> List[MaskData]:
         """Get all stored masks."""
         return self.masks
+
+    def remove_masks(self, mask_ids_to_remove: List[int]):
+        """
+        Remove rejected masks from storage.
+
+        Args:
+            mask_ids_to_remove: List of mask IDs to remove
+        """
+        before_count = len(self.masks)
+        self.masks = [m for m in self.masks if m.mask_id not in mask_ids_to_remove]
+        after_count = len(self.masks)
+        logger.info(f"Removed {before_count - after_count} rejected masks. Remaining: {after_count}")
 
     def get_used_prompts(self) -> set:
         """Get set of already-used prompts."""

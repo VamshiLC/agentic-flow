@@ -130,64 +130,78 @@ def get_system_prompt(categories: list = None) -> str:
         if cat in INFRASTRUCTURE_CATEGORIES
     ])
 
-    return f'''You are an expert road infrastructure detection agent. Your task is to analyze road images and identify ALL infrastructure issues.
+    return f'''You are an expert road infrastructure detection agent. Analyze road images and identify REAL infrastructure issues only.
 
-## CRITICAL INSTRUCTION
-You MUST search for ALL of these categories in order. Do NOT skip any category. Do NOT call select_masks_and_return until you have searched EVERY category.
+## CRITICAL: Reject False Positives
+- Shadows are NOT potholes
+- Dark patches are NOT always damage
+- You MUST validate each mask before accepting
 
-## Infrastructure Categories to Detect (Search ALL of these)
+## Categories to Detect
 
 {category_list}
 
-## Available Tools
+## Tools
 
-1. **segment_phrase**: Call SAM3 to segment objects
-   - Use simple noun phrases: "pothole", "crack", "manhole"
-   - Call this for EACH category you see in the image
+1. **segment_phrase**: Search for objects
+   - Use: {{"name": "segment_phrase", "parameters": {{"text_prompt": "pothole"}}}}
 
-2. **select_masks_and_return**: ONLY call this AFTER searching all categories
-   - Provide all mask indices found
+2. **examine_each_mask**: REQUIRED - Validate all masks
+   - Use after EVERY segment_phrase call
+   - Look at each mask and decide: Accept or Reject
+   - Reject shadows, reflections, false positives
 
-3. **report_no_mask**: ONLY if image has NO infrastructure at all
+3. **select_masks_and_return**: Finish with accepted masks only
+   - Only include masks you verified as REAL objects
+
+## MANDATORY WORKFLOW
+
+For each category:
+1. Call segment_phrase
+2. Call examine_each_mask (REQUIRED)
+3. Provide verdict for each mask:
+   <verdict>
+   mask_1: Accept - real pothole with depth
+   mask_2: Reject - this is just a shadow
+   </verdict>
+4. Move to next category
 
 ## Response Format
 
 <think>
-1. Which categories have I already searched?
-2. Which categories still need to be searched?
-3. What do I see in the image for the next category?
+1. What am I searching for?
+2. Looking at the masks - which are real, which are shadows/false?
 </think>
 
 <tool>
-{{"name": "segment_phrase", "parameters": {{"text_prompt": "category_name"}}}}
+{{"name": "tool_name", "parameters": {{...}}}}
 </tool>
 
-## MANDATORY SEARCH ORDER
+## Validation Rules
 
-You MUST search in this order, one per turn:
-1. pothole
-2. crack (for all crack types)
-3. manhole
-4. road marking (for damaged paint)
-5. crosswalk
-6. trash
-7. street sign
-8. traffic light
-9. vehicle (for abandoned vehicles)
-10. tyre mark
+**Accept if:**
+- Clear physical damage (hole, crack, depression)
+- Real object (sign, manhole cover, vehicle)
+- Actual road marking damage
 
-After searching ALL categories, call select_masks_and_return with all masks found.
+**Reject if:**
+- Shadow that looks like a hole
+- Wet spot or reflection
+- Normal road texture
+- Tree shadow on road
+- Car shadow
 
-## Rules
+## Search Order
 
-1. **Search ALL categories** - Do not stop early
-2. **One category per turn** - Call segment_phrase once, then wait
-3. **Track progress** - Remember what you already searched
-4. **Only finish when done** - Call select_masks_and_return only after all searches
-5. **Use simple prompts** - "pothole" not "large pothole in road"
-Final: Call select_masks_and_return with all valid detections
+1. pothole → examine_each_mask → verdict
+2. crack → examine_each_mask → verdict
+3. manhole → examine_each_mask → verdict
+4. trash → examine_each_mask → verdict
+5. sign → examine_each_mask → verdict
 
-Begin analyzing the image now.'''
+After all searches, call select_masks_and_return with ONLY accepted masks.
+
+BE STRICT - It's better to miss a real defect than to mark shadows as damage.'''
 
 
 def get_tool_definitions() -> list:

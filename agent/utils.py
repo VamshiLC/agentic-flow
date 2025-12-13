@@ -10,7 +10,7 @@ Based on: https://github.com/facebookresearch/sam3/blob/main/sam3/agent/agent_co
 """
 import re
 import json
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 import logging
 
 logger = logging.getLogger(__name__)
@@ -203,6 +203,68 @@ def validate_tool_call(tool_name: str, parameters: Dict[str, Any]) -> Tuple[bool
 def format_error_message(error: str) -> str:
     """Format error message for LLM."""
     return f"[ERROR] {error}\nPlease try again with a valid tool call."
+
+
+def parse_verdict(response: str) -> Dict[int, Tuple[str, str]]:
+    """
+    Parse Accept/Reject verdicts from LLM response.
+
+    Expected format:
+    <verdict>
+    mask_1: Accept - real pothole
+    mask_2: Reject - just a shadow
+    </verdict>
+
+    Returns:
+        Dict mapping mask_id to (verdict, reason)
+        e.g., {1: ("Accept", "real pothole"), 2: ("Reject", "just a shadow")}
+    """
+    verdicts = {}
+
+    # Extract verdict block
+    verdict_match = re.search(r'<verdict>(.*?)</verdict>', response, re.DOTALL | re.IGNORECASE)
+    if verdict_match:
+        verdict_text = verdict_match.group(1)
+    else:
+        # Try to find verdicts without tags
+        verdict_text = response
+
+    # Parse each line
+    # Pattern: mask_N: Accept/Reject - reason
+    pattern = r'mask[_\s]*(\d+)\s*:\s*(Accept|Reject)\s*[-–]?\s*(.*?)(?=\n|mask|$)'
+    matches = re.findall(pattern, verdict_text, re.IGNORECASE)
+
+    for match in matches:
+        mask_id = int(match[0])
+        verdict = match[1].capitalize()
+        reason = match[2].strip() if len(match) > 2 else ""
+        verdicts[mask_id] = (verdict, reason)
+
+    return verdicts
+
+
+def get_accepted_mask_ids(response: str) -> List[int]:
+    """
+    Get list of accepted mask IDs from LLM response.
+
+    Returns:
+        List of mask IDs that were accepted
+    """
+    verdicts = parse_verdict(response)
+    accepted = [mask_id for mask_id, (verdict, _) in verdicts.items() if verdict == "Accept"]
+    return accepted
+
+
+def get_rejected_mask_ids(response: str) -> List[int]:
+    """
+    Get list of rejected mask IDs from LLM response.
+
+    Returns:
+        List of mask IDs that were rejected
+    """
+    verdicts = parse_verdict(response)
+    rejected = [mask_id for mask_id, (verdict, _) in verdicts.items() if verdict == "Reject"]
+    return rejected
 
 
 def extract_detections_from_response(response: str) -> list:

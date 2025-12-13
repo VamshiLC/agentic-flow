@@ -28,7 +28,10 @@ from .utils import (
     normalize_parameters,
     format_error_message,
     build_retry_prompt,
-    DebugLogger
+    DebugLogger,
+    parse_verdict,
+    get_accepted_mask_ids,
+    get_rejected_mask_ids
 )
 
 logger = logging.getLogger(__name__)
@@ -272,6 +275,19 @@ class InfrastructureDetectionAgentCore:
                 result_image=result.image,
                 result_data=result.data
             )
+
+            # Check for verdict in LLM response (after examine_each_mask)
+            # The LLM should provide Accept/Reject verdicts
+            verdicts = parse_verdict(response)
+            if verdicts:
+                rejected_ids = get_rejected_mask_ids(response)
+                if rejected_ids:
+                    logger.info(f"LLM rejected masks: {rejected_ids}")
+                    tool_executor.remove_masks(rejected_ids)
+
+                accepted_ids = get_accepted_mask_ids(response)
+                if accepted_ids:
+                    logger.info(f"LLM accepted masks: {accepted_ids}")
 
             # Check if we should exit
             if result.should_exit:
