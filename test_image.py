@@ -19,6 +19,8 @@ def main():
     parser.add_argument("--output", type=str, default="output", help="Output directory")
     parser.add_argument("--quantization", action="store_true", help="Use 8-bit quantization (saves GPU memory)")
     parser.add_argument("--confidence", type=float, default=0.25, help="Confidence threshold")
+    parser.add_argument("--detect", type=str, help="Comma-separated list of things to detect (e.g., 'pothole,crack,manhole')")
+    parser.add_argument("--prompt", type=str, help="Single item to detect (e.g., 'pothole')")
     args = parser.parse_args()
 
     if not args.image and not args.folder:
@@ -27,9 +29,20 @@ def main():
     # Create output directory
     os.makedirs(args.output, exist_ok=True)
 
+    # Parse custom categories
+    categories = None
+    if args.prompt:
+        categories = [args.prompt.strip()]
+    elif args.detect:
+        categories = [c.strip() for c in args.detect.split(",")]
+
     print("=" * 60)
     print("INFRASTRUCTURE DETECTION TEST")
     print("=" * 60)
+    if categories:
+        print(f"Custom detection: {categories}")
+    else:
+        print("Detecting: ALL categories (use --detect or --prompt to filter)")
 
     # Import and initialize detector
     from agent.detection_agent_hf import InfrastructureDetectionAgentHF
@@ -39,6 +52,7 @@ def main():
     detector = InfrastructureDetectionAgentHF(
         use_quantization=args.quantization,
         sam3_confidence=args.confidence,
+        categories=categories,
         debug=True
     )
 
