@@ -195,7 +195,7 @@ class InfrastructureDetectionAgentCore:
         print(f"{'='*60}")
         logger.info(f"=== TOTAL: {len(masks)} masks from {len(found_categories)} categories ===")
 
-        # Filter by confidence threshold (faster than LLM validation)
+        # Filter by confidence threshold first
         if masks:
             before_count = len(masks)
             masks = [m for m in masks if m.score >= self.config.confidence_threshold]
@@ -203,8 +203,17 @@ class InfrastructureDetectionAgentCore:
             if filtered_count > 0:
                 print(f"Filtered {filtered_count} low-confidence masks (threshold: {self.config.confidence_threshold})")
                 logger.info(f"Filtered {filtered_count} low-confidence masks (threshold: {self.config.confidence_threshold})")
-            print(f"Keeping {len(masks)} high-confidence masks for final output")
+            print(f"Keeping {len(masks)} masks after confidence filter")
             logger.info(f"Keeping {len(masks)} high-confidence masks")
+
+        # LLM VALIDATION - The smart part!
+        # Have the LLM look at each mask and decide if it's correct
+        if masks and self.config.validate_with_llm:
+            print(f"\n{'='*60}")
+            print(f"LLM VALIDATION: Checking {len(masks)} masks...")
+            print(f"{'='*60}")
+            masks = self._validate_masks_with_llm(image, masks, tool_executor)
+            print(f"After LLM validation: {len(masks)} masks kept")
 
         # Build final detections
         if masks:
@@ -270,37 +279,55 @@ class InfrastructureDetectionAgentCore:
             for m in masks
         ])
 
-        validation_prompt = f"""Look at this road image with detected masks.
+        validation_prompt = f"""Look at this road image with colored mask overlays. Each mask is labeled with an ID and category.
 
 DETECTED MASKS:
 {mask_list}
 
-For EACH mask, tell me if it's REAL or FALSE POSITIVE:
-- REAL: Actual infrastructure issue (pothole, crack, sign, etc.)
-- FALSE: Shadow, reflection, normal road texture, wet spot
+For EACH mask, verify if the LABEL matches what's actually in the image:
 
-Reply with ONLY the mask IDs that are REAL issues.
+VALIDATION RULES:
+1. MANHOLE vs POTHOLE: Manholes are ROUND metal covers with patterns/text. Potholes are irregular holes/damage.
+2. CRACK: Must be actual crack lines in pavement, not shadows or joints.
+3. SIGN/LIGHT: Must be actual traffic infrastructure, not random objects.
+4. FALSE POSITIVES to REJECT: shadows, wet spots, normal road texture, stains, painted lines.
+
+CHECK EACH MASK:
+- Is the labeled category CORRECT for what's shown?
+- Is it a REAL object or just a shadow/false detection?
+
+Reply with ONLY the mask IDs that are CORRECTLY labeled real objects.
 Format: KEEP: 1, 3, 5
-Or if all are false: KEEP: none"""
+Or if all wrong: KEEP: none"""
 
         try:
             # Call LLM for validation
+            print("Asking LLM to validate each mask...")
             result = self.qwen_detector.detect(rendered_image, validation_prompt)
 
             if result.get("success"):
                 response = result.get("text", "")
+                print(f"LLM response: {response[:300]}...")
                 logger.info(f"LLM validation response: {response[:200]}")
 
                 # Parse which masks to keep
                 keep_ids = self._parse_keep_ids(response, masks)
 
-                if keep_ids:
+                if keep_ids is not None:
                     validated_masks = [m for m in masks if m.mask_id in keep_ids]
                     rejected_count = len(masks) - len(validated_masks)
+
+                    # Show what was kept/rejected
+                    print(f"\n✓ LLM KEPT {len(validated_masks)} masks: {keep_ids}")
+                    rejected_ids = [m.mask_id for m in masks if m.mask_id not in keep_ids]
+                    if rejected_ids:
+                        print(f"✗ LLM REJECTED {rejected_count} masks: {rejected_ids}")
+
                     logger.info(f"LLM rejected {rejected_count} false positives")
                     return validated_masks
                 else:
                     # If parsing fails, keep all masks
+                    print("⚠ Could not parse LLM response, keeping all masks")
                     logger.warning("Could not parse LLM validation, keeping all masks")
                     return masks
             else:
