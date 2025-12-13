@@ -119,6 +119,9 @@ class InfrastructureDetectionAgentCore:
         if self.config.force_all_categories:
             return self._run_direct_category_search(image)
 
+        # Run the smart agentic loop with LLM-driven detection
+        return self._run_agentic_loop(image, user_query, start_time)
+
     def _run_direct_category_search(self, image: Image.Image) -> AgentResult:
         """
         Directly search for ALL categories without relying on LLM decisions.
@@ -188,6 +191,28 @@ class InfrastructureDetectionAgentCore:
             message=f"Found {len(detections)} infrastructure issues across {len(categories)} categories"
         )
 
+    def _run_agentic_loop(
+        self,
+        image: Image.Image,
+        user_query: str,
+        start_time: float
+    ) -> AgentResult:
+        """
+        Run the smart agentic loop with LLM-driven detection.
+
+        This is the TRUE agentic flow matching SAM3 agent:
+        - LLM decides what to search for
+        - LLM validates each mask (Accept/Reject)
+        - Iterative refinement until done
+
+        Args:
+            image: PIL Image to analyze
+            user_query: User query
+            start_time: Start time for elapsed calculation
+
+        Returns:
+            AgentResult with detections
+        """
         # Get system prompt
         system_prompt = get_system_prompt(self.config.categories)
 
