@@ -25,6 +25,7 @@ from .utils import (
     parse_tool_call,
     parse_tool_call_flexible,
     validate_tool_call,
+    normalize_parameters,
     format_error_message,
     build_retry_prompt,
     DebugLogger
@@ -177,8 +178,11 @@ class InfrastructureDetectionAgentCore:
                 )
                 continue
 
+            # Normalize parameters before execution
+            parameters = normalize_parameters(tool_name, parameters)
+
             logger.info(f"Executing tool: {tool_name}")
-            logger.debug(f"Parameters: {parameters}")
+            logger.info(f"Parameters: {parameters}")
 
             # Execute tool
             result = tool_executor.execute(tool_name, parameters)

@@ -132,6 +132,26 @@ def parse_tool_call_flexible(response: str) -> Tuple[Optional[str], Optional[Dic
     return None, None, thinking
 
 
+def normalize_parameters(tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalize parameter names to handle LLM variations.
+
+    The LLM sometimes uses different parameter names like "param" instead of "text_prompt".
+    This function normalizes them to the expected names.
+    """
+    normalized = parameters.copy()
+
+    if tool_name == "segment_phrase":
+        # Accept "param", "prompt", "query", "text" as aliases for "text_prompt"
+        aliases = ["param", "prompt", "query", "text", "phrase"]
+        for alias in aliases:
+            if alias in normalized and "text_prompt" not in normalized:
+                normalized["text_prompt"] = normalized.pop(alias)
+                break
+
+    return normalized
+
+
 def validate_tool_call(tool_name: str, parameters: Dict[str, Any]) -> Tuple[bool, str]:
     """
     Validate a parsed tool call.
@@ -143,6 +163,9 @@ def validate_tool_call(tool_name: str, parameters: Dict[str, Any]) -> Tuple[bool
     Returns:
         Tuple of (is_valid, error_message)
     """
+    # First normalize the parameters
+    parameters = normalize_parameters(tool_name, parameters)
+
     valid_tools = {
         "segment_phrase": ["text_prompt"],
         "examine_each_mask": [],
