@@ -154,6 +154,9 @@ class InfrastructureDetectionAgentCore:
                 "tyre mark", "skid mark"
             ]
 
+        print(f"\n{'='*60}")
+        print(f"SEARCHING ALL {len(categories)} CATEGORIES WITH SAM3")
+        print(f"{'='*60}")
         logger.info(f"=== SEARCHING ALL {len(categories)} CATEGORIES ===")
 
         # Initialize tool executor
@@ -161,22 +164,32 @@ class InfrastructureDetectionAgentCore:
 
         # Search EVERY category
         found_categories = []
+        total_masks_found = 0
         for i, category in enumerate(categories):
+            print(f"[{i+1}/{len(categories)}] Searching: {category}...", end=" ", flush=True)
             logger.info(f"[{i+1}/{len(categories)}] Searching: {category}")
 
             try:
                 result = tool_executor.execute("segment_phrase", {"text_prompt": category})
                 if result.success and result.data.get("num_masks", 0) > 0:
                     num_found = result.data['num_masks']
+                    total_masks_found += num_found
+                    print(f"✓ {num_found} mask(s)")
                     logger.info(f"  ✓ Found {num_found} mask(s) for '{category}'")
                     found_categories.append(category)
                 else:
+                    print("✗ 0 masks")
                     logger.debug(f"  ✗ No masks for '{category}'")
             except Exception as e:
+                print(f"ERROR: {e}")
                 logger.warning(f"  Error searching '{category}': {e}")
 
         # Get all masks found
         masks = tool_executor.get_all_masks()
+        print(f"\n{'='*60}")
+        print(f"TOTAL: {len(masks)} masks from {len(found_categories)} categories")
+        print(f"Categories with detections: {found_categories}")
+        print(f"{'='*60}")
         logger.info(f"=== TOTAL: {len(masks)} masks from {len(found_categories)} categories ===")
 
         # Filter by confidence threshold (faster than LLM validation)
@@ -185,11 +198,14 @@ class InfrastructureDetectionAgentCore:
             masks = [m for m in masks if m.score >= self.config.confidence_threshold]
             filtered_count = before_count - len(masks)
             if filtered_count > 0:
+                print(f"Filtered {filtered_count} low-confidence masks (threshold: {self.config.confidence_threshold})")
                 logger.info(f"Filtered {filtered_count} low-confidence masks (threshold: {self.config.confidence_threshold})")
+            print(f"Keeping {len(masks)} high-confidence masks for final output")
             logger.info(f"Keeping {len(masks)} high-confidence masks")
 
         # Build final detections
         if masks:
+            print(f"\nRendering {len(masks)} masks on image...")
             detections = [
                 {
                     "mask_id": m.mask_id,
@@ -202,7 +218,9 @@ class InfrastructureDetectionAgentCore:
                 for m in masks
             ]
             final_image = tool_executor._render_masks(masks)
+            print(f"✓ Mask overlay rendered successfully")
         else:
+            print("\n⚠ No masks found - returning original image without overlay")
             detections = []
             final_image = image
 
