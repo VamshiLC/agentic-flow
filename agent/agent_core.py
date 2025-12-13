@@ -142,8 +142,13 @@ class InfrastructureDetectionAgentCore:
             # Add assistant response to history
             message_manager.add_assistant_message(response)
 
+            # DEBUG: Log raw LLM response
+            logger.info(f"LLM Response (first 500 chars): {response[:500] if response else 'EMPTY'}")
+
             # Parse tool call
             tool_name, parameters, thinking = parse_tool_call_flexible(response)
+
+            logger.info(f"Parsed: tool={tool_name}, params={parameters}")
 
             if thinking:
                 logger.debug(f"LLM thinking: {thinking[:200]}...")
