@@ -202,21 +202,27 @@ DETAILED_PROMPTS = {
     },
 
     "damaged_paint": {
-        "what": "Deteriorated, faded, or worn road markings and painted lines",
+        "what": "Deteriorated, faded, or worn road markings and painted lines ON PAVEMENT ONLY",
         "visual_cues": [
-            "Faded white or yellow road lines",
-            "Partially worn lane markings",
-            "Chipped or peeling paint on pavement",
-            "Barely visible crosswalk markings",
-            "Ghosted or shadow images of old markings",
-            "Uneven or patchy paint application"
+            "MUST be painted directly ON the asphalt/concrete road surface",
+            "Faded white or yellow lane lines or arrows on road",
+            "Partially worn lane divider markings on pavement",
+            "Chipped or peeling paint showing black asphalt underneath",
+            "Barely visible road arrows, text, or symbols on pavement",
+            "Ghosted or shadow images of old markings on road surface",
+            "Uneven or patchy paint application on pavement"
         ],
-        "location": "Road surfaces, crosswalks, parking lots",
+        "location": "Road surfaces, crosswalks, parking lots - ONLY ON GROUND/PAVEMENT",
         "not_this": [
+            "⚠️ NEVER detect painted fences, barriers, or construction equipment",
+            "⚠️ NEVER detect yellow/white objects that are NOT paint on road",
+            "⚠️ NEVER detect curbs, poles, or vertical structures",
             "Fresh, clear road markings",
             "Intentionally removed markings",
             "Shadows on painted lines",
-            "Dirt or debris on otherwise intact paint"
+            "Dirt or debris on otherwise intact paint",
+            "Painted signs or boards (not on road surface)",
+            "Colored fencing or barriers"
         ]
     },
 

@@ -369,23 +369,120 @@ class InfrastructureDetectionAgentHF:
         Simple category names like "potholes" are too vague.
         """
         prompts = {
-            "potholes": "a hole or depression in the road pavement surface",
-            "alligator_cracks": "a network of interconnected cracks forming a pattern on the pavement",
-            "longitudinal_cracks": "a crack running parallel along the direction of the road",
-            "transverse_cracks": "a crack running across the width of the road perpendicular to traffic",
-            "road_surface_damage": "deteriorated or damaged road pavement surface",
-            "abandoned_vehicle": "a damaged, broken down, or abandoned vehicle",
-            "homeless_encampment": "a tent, tarp, or makeshift shelter structure",
-            "homeless_person": "a person with belongings or bedding in a public area",
-            "manholes": "a round or square metal manhole cover on the road",
-            "damaged_paint": "faded, worn, or deteriorated road paint markings",
-            "damaged_crosswalks": "faded or worn pedestrian crosswalk stripes on the road",
-            "dumped_trash": "trash, garbage, debris, or discarded items",
-            "street_signs": "a traffic sign or road sign mounted on a pole",
-            "traffic_lights": "a traffic signal light with colored lights for vehicles",
-            "tyre_marks": "dark rubber tire marks or skid marks on the pavement"
+            "potholes": "a hole or depression in the asphalt or concrete road pavement surface",
+            "alligator_cracks": "a network of interconnected cracks forming an alligator-skin pattern on the asphalt pavement",
+            "longitudinal_cracks": "a crack running parallel along the direction of the road centerline",
+            "transverse_cracks": "a crack running across the width of the road perpendicular to the direction of traffic",
+            "road_surface_damage": "deteriorated, broken, or crumbling asphalt or concrete road pavement surface with exposed aggregate or material loss",
+            "abandoned_vehicle": "a damaged, rusted, broken down, or abandoned motor vehicle with flat tires or missing parts",
+            "homeless_encampment": "a tent, tarp, sleeping bag, or makeshift shelter structure used for temporary living",
+            "homeless_person": "a person sitting or lying on the ground with belongings, bedding, or camping gear in a public area",
+            "manholes": "a round or square metal manhole cover or utility access hatch embedded in the road surface",
+            "damaged_paint": "faded, worn, or deteriorated white or yellow road lane markings, arrows, or text painted directly on the asphalt surface",
+            "damaged_crosswalks": "faded, worn, or deteriorated white pedestrian crosswalk stripes or zebra crossing markings painted on the road surface",
+            "dumped_trash": "trash bags, garbage, litter, debris, furniture, or illegally discarded items on or beside the road",
+            "street_signs": "a traffic regulatory sign, warning sign, or street name sign mounted on a metal or wooden pole",
+            "traffic_lights": "a traffic signal light fixture with red, yellow, and green colored lights for controlling vehicle traffic",
+            "tyre_marks": "dark black rubber tire marks, skid marks, or burnout marks on the asphalt or concrete pavement surface"
         }
         return prompts.get(category, category)
+
+    def _select_best_mask(
+        self,
+        masks: List[np.ndarray],
+        bbox: Optional[List[int]],
+        image_size: Tuple[int, int]
+    ) -> Optional[np.ndarray]:
+        """
+        Select the best mask from SAM3's multiple predictions.
+
+        SAM3 returns multiple masks with different granularities. We want the mask that:
+        1. Fits within or close to the bounding box
+        2. Isn't oversized (doesn't cover the entire image)
+        3. Has reasonable coverage of the bbox area
+
+        Args:
+            masks: List of binary masks from SAM3
+            bbox: Bounding box [x1, y1, x2, y2] in pixels (or None)
+            image_size: (width, height) of image
+
+        Returns:
+            Best fitting mask or None
+        """
+        if not masks or len(masks) == 0:
+            return None
+
+        img_width, img_height = image_size
+        total_image_pixels = img_width * img_height
+
+        # If no bbox provided, return the smallest mask (most specific)
+        if bbox is None:
+            # Sort by mask area (ascending) and return smallest
+            masks_with_area = [(mask, np.sum(mask)) for mask in masks]
+            masks_with_area.sort(key=lambda x: x[1])
+            return masks_with_area[0][0] if masks_with_area else None
+
+        x1, y1, x2, y2 = bbox
+        bbox_width = x2 - x1
+        bbox_height = y2 - y1
+        bbox_area = bbox_width * bbox_height
+
+        # Create bbox mask for IoU calculation
+        bbox_mask = np.zeros((img_height, img_width), dtype=bool)
+        bbox_mask[y1:y2, x1:x2] = True
+
+        best_mask = None
+        best_score = -1
+
+        for mask in masks:
+            # Convert to numpy array if needed
+            if torch.is_tensor(mask):
+                mask = mask.cpu().numpy()
+
+            # Ensure mask is 2D
+            if mask.ndim > 2:
+                mask = mask.squeeze()
+
+            # Ensure mask is boolean
+            mask_binary = mask > 0.5 if mask.dtype != bool else mask
+
+            # Calculate mask area
+            mask_area = np.sum(mask_binary)
+
+            # Filter out masks that are too large (>50% of image = likely wrong)
+            if mask_area > 0.5 * total_image_pixels:
+                logger.debug(f"Rejecting oversized mask: {mask_area}/{total_image_pixels} pixels ({mask_area/total_image_pixels*100:.1f}%)")
+                continue
+
+            # Filter out masks that are too small (< 1% of bbox)
+            if mask_area < 0.01 * bbox_area:
+                logger.debug(f"Rejecting undersized mask: {mask_area}/{bbox_area} pixels ({mask_area/bbox_area*100:.1f}% of bbox)")
+                continue
+
+            # Calculate IoU with bounding box
+            intersection = np.sum(mask_binary & bbox_mask)
+            union = np.sum(mask_binary | bbox_mask)
+            iou = intersection / union if union > 0 else 0
+
+            # Calculate what % of the mask is inside the bbox
+            mask_coverage_in_bbox = intersection / mask_area if mask_area > 0 else 0
+
+            # Score: prefer masks that are mostly inside bbox with good IoU
+            # IoU weight: 0.6, coverage weight: 0.4
+            score = 0.6 * iou + 0.4 * mask_coverage_in_bbox
+
+            logger.debug(f"Mask area={mask_area}, IoU={iou:.3f}, coverage={mask_coverage_in_bbox:.3f}, score={score:.3f}")
+
+            if score > best_score:
+                best_score = score
+                best_mask = mask_binary
+
+        if best_mask is not None:
+            logger.debug(f"Selected mask with score={best_score:.3f}")
+        else:
+            logger.warning("No suitable mask found - all masks were oversized, undersized, or poor fit")
+
+        return best_mask
 
     def _segment_with_sam3(
         self,
@@ -435,8 +532,18 @@ class InfrastructureDetectionAgentHF:
                     state=inference_state
                 )
 
-                # Retrieve results from state
-                masks = inference_state.get('masks', [])
+                # FIX: Actually run inference to get masks
+                # After adding geometric prompt, we need to call predict() to generate masks
+                output = self.sam3_processor.predict(inference_state)
+
+                # Extract masks from prediction output
+                if isinstance(output, dict) and 'masks' in output:
+                    masks = output['masks']
+                elif hasattr(output, 'masks'):
+                    masks = output.masks
+                else:
+                    logger.warning(f"Unexpected SAM3 geometric output format: {type(output)}")
+                    masks = []
 
             # FALLBACK: Use text prompt
             elif query is not None:
@@ -454,10 +561,20 @@ class InfrastructureDetectionAgentHF:
                 logger.error("SAM3 called without bbox or query")
                 return None
 
-            # Extract masks with better logging
+            # Extract and select best mask
             if masks is not None and len(masks) > 0:
                 logger.debug(f"SAM3 returned {len(masks)} masks for bbox={bbox}")
-                return masks[0]  # Return highest confidence mask
+
+                # SAM3 returns multiple masks with different granularities
+                # We need to select the mask that best fits the bounding box
+                selected_mask = self._select_best_mask(masks, bbox, image.size)
+
+                if selected_mask is not None:
+                    logger.debug(f"Selected mask with area: {np.sum(selected_mask) if isinstance(selected_mask, np.ndarray) else 'unknown'}")
+                    return selected_mask
+                else:
+                    logger.warning(f"No suitable mask found for bbox={bbox}")
+                    return None
             else:
                 logger.warning(f"SAM3 returned 0 masks for bbox={bbox}, query={query}")
                 return None

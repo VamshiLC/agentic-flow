@@ -1,7 +1,7 @@
 """
 Agent module for infrastructure detection
 """
-from .detection_agent import InfrastructureDetectionAgent
+from .detection_agent_hf import InfrastructureDetectionAgentHF
 from .prompts import (
     SYSTEM_PROMPT,
     get_system_prompt,
@@ -11,7 +11,7 @@ from .prompts import (
 )
 
 __all__ = [
-    "InfrastructureDetectionAgent",
+    "InfrastructureDetectionAgentHF",
     "SYSTEM_PROMPT",
     "get_system_prompt",
     "get_user_prompt",

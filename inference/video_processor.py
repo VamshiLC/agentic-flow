@@ -13,7 +13,7 @@ from utils.video_utils import extract_frames, get_video_info, chunk_video
 from inference.single_frame import process_single_frame
 from utils.output_formatter import save_detection_json, create_detection_summary
 from models.sam3_loader import load_sam3_model
-from models.qwen_loader import get_qwen_config
+from agent.detection_agent_hf import InfrastructureDetectionAgentHF
 
 try:
     import torch
@@ -117,10 +117,13 @@ def process_video(
         print("ERROR: No frames extracted from video")
         return None
 
-    # Load models once for all frames
-    print(f"\nSTEP 3: Loading models...")
-    sam3_processor = load_sam3_model(confidence_threshold=0.5)
-    llm_config = get_qwen_config()
+    # Load detector once for all frames
+    print(f"\nSTEP 3: Loading HF-based detector (Qwen + SAM3)...")
+    sam3_processor = load_sam3_model(confidence_threshold=0.3)
+    detector = InfrastructureDetectionAgentHF(
+        sam3_processor=sam3_processor,
+        sam3_confidence=0.3
+    )
 
     # Process each frame
     print(f"\nSTEP 4: Processing {num_frames} frames...")
@@ -138,8 +141,7 @@ def process_video(
             detections = process_single_frame(
                 frame_path,
                 output_dir=detections_dir,
-                sam3_processor=sam3_processor,
-                llm_config=llm_config,
+                detector=detector,
                 save_json=True,
                 debug=debug
             )
