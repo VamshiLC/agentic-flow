@@ -37,13 +37,14 @@ logger = logging.getLogger(__name__)
 @dataclass
 class AgentConfig:
     """Configuration for the agent."""
-    max_turns: int = 10  # Maximum agentic loop iterations (reduced from 50)
+    max_turns: int = 20  # Maximum agentic loop iterations
     max_retries: int = 2  # Max retries per turn on parse errors
     categories: Optional[List[str]] = None  # Categories to detect
     debug: bool = False  # Enable debug logging
     debug_dir: str = "debug"  # Debug output directory
-    prune_after_turns: int = 5  # Prune messages after N turns
-    auto_exit_on_masks: bool = True  # Auto exit when masks are found
+    prune_after_turns: int = 10  # Prune messages after N turns
+    auto_exit_on_masks: bool = False  # Don't auto exit - search all categories
+    force_all_categories: bool = True  # Force search for ALL categories
 
 
 @dataclass
@@ -110,6 +111,79 @@ class InfrastructureDetectionAgentCore:
             AgentResult with detections
         """
         start_time = time.time()
+
+        # If force_all_categories is enabled, use direct search instead of LLM loop
+        if self.config.force_all_categories:
+            return self._run_direct_category_search(image)
+
+    def _run_direct_category_search(self, image: Image.Image) -> AgentResult:
+        """
+        Directly search for ALL categories without relying on LLM decisions.
+
+        This is faster and more reliable - we call SAM3 once for each category.
+        """
+        start_time = time.time()
+
+        # Get categories to search
+        if self.config.categories:
+            categories = self.config.categories
+        else:
+            categories = [
+                "pothole", "alligator crack", "longitudinal crack", "transverse crack",
+                "road damage", "abandoned vehicle", "homeless encampment", "tent",
+                "manhole", "damaged road marking", "crosswalk", "trash", "debris",
+                "street sign", "traffic light", "tyre mark", "skid mark"
+            ]
+
+        logger.info(f"Direct search for {len(categories)} categories")
+
+        # Initialize tool executor
+        tool_executor = ToolExecutor(self.sam3_processor, image)
+
+        # Search each category
+        for i, category in enumerate(categories):
+            logger.info(f"[{i+1}/{len(categories)}] Searching for: {category}")
+
+            try:
+                result = tool_executor.execute("segment_phrase", {"text_prompt": category})
+                if result.success and result.data.get("num_masks", 0) > 0:
+                    logger.info(f"  Found {result.data['num_masks']} mask(s) for '{category}'")
+                else:
+                    logger.info(f"  No masks found for '{category}'")
+            except Exception as e:
+                logger.warning(f"  Error searching '{category}': {e}")
+
+        # Compile all masks found
+        masks = tool_executor.get_all_masks()
+
+        if masks:
+            detections = [
+                {
+                    "mask_id": m.mask_id,
+                    "category": m.category,
+                    "severity": tool_executor._category_to_severity(m.category),
+                    "confidence": m.score,
+                    "bbox": m.bbox,
+                    "mask": m.mask,
+                }
+                for m in masks
+            ]
+            final_image = tool_executor._render_masks(masks)
+        else:
+            detections = []
+            final_image = image
+
+        elapsed = time.time() - start_time
+        logger.info(f"Direct search complete: {len(detections)} detections in {elapsed:.2f}s")
+
+        return AgentResult(
+            success=True,
+            detections=detections,
+            num_detections=len(detections),
+            final_image=final_image,
+            turns_taken=len(categories),
+            message=f"Found {len(detections)} infrastructure issues across {len(categories)} categories"
+        )
 
         # Get system prompt
         system_prompt = get_system_prompt(self.config.categories)
