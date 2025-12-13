@@ -138,18 +138,21 @@ class InfrastructureDetectionAgentCore:
         if self.config.categories:
             categories = self.config.categories
         else:
+            # IMPORTANT: Order matters! Search specific objects FIRST to avoid
+            # misclassification (e.g., manhole detected as pothole)
             categories = [
-                # Critical defects
-                "pothole", "alligator crack", "road crack", "pavement crack",
-                # Surface damage
-                "longitudinal crack", "transverse crack", "road damage",
+                # Infrastructure - search FIRST (these are specific objects)
+                "manhole", "manhole cover",
+                "street sign", "traffic sign", "traffic light",
+                "crosswalk", "road marking",
                 # Objects on road
-                "abandoned vehicle", "abandoned car", "debris", "trash", "garbage",
-                # Infrastructure
-                "manhole", "manhole cover", "street sign", "traffic sign",
-                "traffic light", "crosswalk", "road marking",
+                "abandoned vehicle", "abandoned car",
+                "debris", "trash", "garbage",
                 # Encampments
                 "tent", "homeless encampment",
+                # Road defects - search LAST (these are generic damage)
+                "pothole", "alligator crack", "road crack", "pavement crack",
+                "longitudinal crack", "transverse crack", "road damage",
                 # Marks
                 "tyre mark", "skid mark"
             ]

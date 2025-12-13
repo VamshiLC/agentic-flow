@@ -180,22 +180,33 @@ class ToolExecutor:
                 )
 
             # Add masks to storage with IDs and category
+            # BUT skip masks that heavily overlap with existing masks (avoid duplicates)
             start_id = len(self.masks) + 1
             category = self._prompt_to_category(text_prompt)
+            added_count = 0
             for i, mask_data in enumerate(masks):
-                mask_data.mask_id = start_id + i
+                # Check if this mask overlaps too much with existing masks
+                if self._is_duplicate_mask(mask_data):
+                    logger.debug(f"Skipping duplicate mask for '{text_prompt}' - overlaps with existing detection")
+                    continue
+
+                mask_data.mask_id = start_id + added_count
                 mask_data.category = category
                 mask_data.text_prompt = text_prompt
                 self.masks.append(mask_data)
+                added_count += 1
 
             # Render masks on image
             rendered_image = self._render_masks(self.masks)
             self.current_mask_image = rendered_image
 
+            skipped = len(masks) - added_count
+            skip_msg = f" (skipped {skipped} duplicates)" if skipped > 0 else ""
+
             return ToolResult(
                 success=True,
                 tool_name="segment_phrase",
-                message=f"SAM3 found {len(masks)} mask(s) for '{text_prompt}'. Total masks: {len(self.masks)}",
+                message=f"SAM3 found {added_count} new mask(s) for '{text_prompt}'{skip_msg}. Total masks: {len(self.masks)}",
                 data={
                     "num_masks": len(masks),
                     "total_masks": len(self.masks),
@@ -468,6 +479,64 @@ Then call select_masks_and_return with ONLY the accepted mask IDs.
         x1, x2 = np.where(cols)[0][[0, -1]]
 
         return [int(x1), int(y1), int(x2), int(y2)]
+
+    def _is_duplicate_mask(self, new_mask: MaskData, iou_threshold: float = 0.5) -> bool:
+        """
+        Check if a new mask significantly overlaps with existing masks.
+
+        This prevents the same object (e.g., manhole) from being detected
+        multiple times with different labels (e.g., as both 'pothole' and 'manhole').
+
+        Args:
+            new_mask: The new mask to check
+            iou_threshold: IoU threshold above which masks are considered duplicates
+
+        Returns:
+            True if this mask is a duplicate, False otherwise
+        """
+        if not self.masks:
+            return False
+
+        new_mask_np = new_mask.mask
+        if new_mask_np is None:
+            return False
+
+        # Ensure mask is boolean
+        if new_mask_np.dtype != bool:
+            new_mask_np = new_mask_np > 0
+
+        new_area = np.sum(new_mask_np)
+        if new_area == 0:
+            return True  # Empty mask is duplicate
+
+        for existing in self.masks:
+            existing_mask_np = existing.mask
+            if existing_mask_np is None:
+                continue
+
+            # Ensure same shape
+            if existing_mask_np.shape != new_mask_np.shape:
+                continue
+
+            # Ensure boolean
+            if existing_mask_np.dtype != bool:
+                existing_mask_np = existing_mask_np > 0
+
+            # Calculate IoU (Intersection over Union)
+            intersection = np.sum(new_mask_np & existing_mask_np)
+            existing_area = np.sum(existing_mask_np)
+            union = new_area + existing_area - intersection
+
+            if union > 0:
+                iou = intersection / union
+                if iou >= iou_threshold:
+                    logger.debug(
+                        f"Duplicate detected: IoU={iou:.2f} between "
+                        f"'{new_mask.text_prompt}' and existing '{existing.category}'"
+                    )
+                    return True
+
+        return False
 
     def _render_masks(
         self,
