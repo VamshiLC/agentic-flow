@@ -37,14 +37,14 @@ logger = logging.getLogger(__name__)
 @dataclass
 class AgentConfig:
     """Configuration for the agent."""
-    max_turns: int = 20  # Maximum agentic loop iterations
+    max_turns: int = 25  # Enough turns to check all categories
     max_retries: int = 2  # Max retries per turn on parse errors
     categories: Optional[List[str]] = None  # Categories to detect
     debug: bool = False  # Enable debug logging
     debug_dir: str = "debug"  # Debug output directory
-    prune_after_turns: int = 10  # Prune messages after N turns
-    auto_exit_on_masks: bool = False  # Don't auto exit - search all categories
-    force_all_categories: bool = True  # Force search for ALL categories
+    prune_after_turns: int = 15  # Prune messages after N turns
+    auto_exit_on_masks: bool = False  # Don't auto exit - let LLM decide
+    force_all_categories: bool = False  # Use smart LLM-driven search
 
 
 @dataclass
