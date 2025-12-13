@@ -1,22 +1,26 @@
 """
 Infrastructure Detection Agent using Qwen3-VL (Hugging Face) + SAM3
 
-This implements the agentic flow where:
-1. Qwen3-VL detects and describes infrastructure issues
-2. SAM3 segments each detection based on Qwen's description
+This implements the TRUE agentic flow matching the official SAM3 agent:
+https://github.com/facebookresearch/sam3/blob/main/sam3/agent/agent_core.py
+
+Features:
+- Multi-turn conversation with LLM
+- 4 tools: segment_phrase, examine_each_mask, select_masks_and_return, report_no_mask
+- Iterative refinement when masks are unsatisfactory
+- Message pruning for context management
+- Debug logging
 
 No vLLM server required - uses Hugging Face Transformers directly.
 """
-import re
-import torch
 import numpy as np
 from PIL import Image
-from typing import List, Dict, Optional, Union, Tuple
+from typing import List, Dict, Optional, Union
 import logging
 
 from models.qwen_direct_loader import Qwen3VLDirectDetector
 from models.sam3_loader import load_sam3_model
-from prompts.category_prompts import build_detailed_prompt
+from .agent_core import InfrastructureDetectionAgentCore, AgentConfig, AgentResult
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +29,14 @@ class InfrastructureDetectionAgentHF:
     """
     Agentic infrastructure detector using Qwen3-VL (HF) + SAM3.
 
-    Architecture:
-    - Qwen3-VL: Detects infrastructure issues and provides descriptions
-    - SAM3: Segments each detection based on description (acts as a tool)
+    This is the TRUE agentic implementation with:
+    - Multi-turn conversation loop
+    - Tool calling (segment_phrase, examine_each_mask, etc.)
+    - Iterative mask refinement
+    - LLM-driven mask validation
 
-    This is the agentic pattern without vLLM server dependency.
+    Architecture:
+        Qwen3-VL (brain) <-> Agent Core (orchestrator) <-> SAM3 (tool)
     """
 
     def __init__(
@@ -40,7 +47,9 @@ class InfrastructureDetectionAgentHF:
         device: Optional[str] = None,
         use_quantization: bool = False,
         low_memory: bool = False,
-        sam3_confidence: float = 0.3  # Lower threshold to accept more masks
+        sam3_confidence: float = 0.3,
+        max_turns: int = 50,
+        debug: bool = False
     ):
         """
         Initialize the agentic detector.
@@ -53,17 +62,28 @@ class InfrastructureDetectionAgentHF:
             use_quantization: Use 8-bit quantization for Qwen
             low_memory: Enable memory optimizations
             sam3_confidence: Confidence threshold for SAM3 segmentation
+            max_turns: Maximum agentic loop iterations
+            debug: Enable debug logging
         """
+        import torch
+
         self.model_name = model_name
         self.categories = categories
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.max_turns = max_turns
+        self.debug = debug
 
-        print(f"\nInitializing Agentic Detector (Qwen3-VL + SAM3)")
+        print(f"\n{'='*60}")
+        print("INITIALIZING AGENTIC DETECTOR (Qwen3-VL + SAM3)")
+        print(f"{'='*60}")
         print(f"  Model: {model_name}")
         print(f"  Device: {self.device}")
         print(f"  SAM3 confidence: {sam3_confidence}")
+        print(f"  Max turns: {max_turns}")
+        print(f"  Debug mode: {debug}")
 
         # Load Qwen3-VL detector (the "brain")
+        print("\n[1/2] Loading Qwen3-VL (Vision-Language Model)...")
         self.qwen_detector = Qwen3VLDirectDetector(
             model_name=model_name,
             device=device,
@@ -72,8 +92,8 @@ class InfrastructureDetectionAgentHF:
         )
 
         # Load SAM3 processor (the "tool")
+        print("\n[2/2] Loading SAM3 (Segmentation Tool)...")
         if sam3_processor is None:
-            print("\nLoading SAM3 segmentation tool...")
             self.sam3_processor = load_sam3_model(
                 confidence_threshold=sam3_confidence,
                 device=self.device
@@ -82,389 +102,127 @@ class InfrastructureDetectionAgentHF:
             self.sam3_processor = sam3_processor
             print("Using pre-loaded SAM3 processor")
 
-        print("✓ Agentic detector initialized!")
+        print(f"\n{'='*60}")
+        print("AGENTIC DETECTOR READY")
+        print(f"{'='*60}\n")
 
     def detect_infrastructure(
         self,
         image: Union[Image.Image, str],
-        use_sam3: bool = True
+        use_sam3: bool = True,
+        user_query: str = None
     ) -> Dict:
         """
-        Detect infrastructure issues with optional SAM3 segmentation.
+        Detect infrastructure issues using the agentic loop.
 
-        Agentic workflow:
-        1. Qwen3-VL analyzes image → detections with descriptions
-        2. For each detection → SAM3 segments based on description
-        3. Return detections with bounding boxes + segmentation masks
+        This is the main entry point for detection. It:
+        1. Initializes the agent core
+        2. Runs the multi-turn agentic loop
+        3. Returns formatted detections
 
         Args:
             image: PIL Image or path to image file
-            use_sam3: If True, add SAM3 segmentation masks
+            use_sam3: If True, use SAM3 for segmentation (always True in agentic mode)
+            user_query: Optional custom query for the agent
 
         Returns:
             dict: {
-                'detections': [...],
+                'detections': [...],  # List of detections with masks
                 'num_detections': int,
-                'has_masks': bool
+                'has_masks': bool,
+                'turns_taken': int,
+                'text_response': str
             }
         """
         # Convert to PIL if needed
         if isinstance(image, str):
             image = Image.open(image).convert('RGB')
 
-        # Step 1: Build detection prompt
-        if self.categories is None:
-            from detector_unified import INFRASTRUCTURE_CATEGORIES
-            categories = list(INFRASTRUCTURE_CATEGORIES.keys())
-        else:
-            categories = self.categories
+        # Default query
+        if user_query is None:
+            user_query = "Analyze this road image and detect all infrastructure issues."
 
-        prompt = build_detailed_prompt(categories)
+        # Create agent config
+        config = AgentConfig(
+            max_turns=self.max_turns,
+            categories=self.categories,
+            debug=self.debug,
+            debug_dir="debug"
+        )
 
-        # Step 2: Qwen detects infrastructure issues
-        logger.debug("Step 1: Qwen3-VL detection...")
-        qwen_result = self.qwen_detector.detect(image, prompt)
+        # Create and run agent
+        agent = InfrastructureDetectionAgentCore(
+            qwen_detector=self.qwen_detector,
+            sam3_processor=self.sam3_processor,
+            config=config
+        )
 
-        # Handle None or invalid result
-        if qwen_result is None or not qwen_result.get('success', False):
-            logger.error("Qwen detection failed")
-            return {
-                'detections': [],
-                'num_detections': 0,
-                'has_masks': False
-            }
+        # Run agentic loop
+        result: AgentResult = agent.run(image, user_query)
 
-        # Step 3: Parse text response to extract detections
-        text_response = qwen_result.get('text', '')
-        detections = self._parse_detections(text_response, image.size)
-
-        if not use_sam3 or len(detections) == 0:
-            # No SAM3 segmentation needed/possible
-            return {
-                'detections': detections,
-                'num_detections': len(detections),
-                'has_masks': False
-            }
-
-        # Step 4: For each detection, get SAM3 segmentation mask
-        logger.debug(f"Step 2: SAM3 segmentation for {len(detections)} detections...")
-
-        enhanced_detections = []
-        for det in detections:
-            # Use Qwen's bbox (preferred) and description (fallback) to guide SAM3
-            try:
-                label = det.get('label', 'unknown')
-                description = det.get('description', label)
-                bbox = det.get('bbox', None)  # Get bounding box from detection
-
-                # Pass bbox to SAM3 (preferred method for accurate segmentation)
-                mask = self._segment_with_sam3(
-                    image,
-                    query=description,  # Fallback if bbox fails
-                    bbox=bbox           # Primary method
-                )
-
-                # Convert mask to JSON-serializable format
-                if mask is not None:
-                    # Convert torch.Tensor to numpy if needed
-                    if torch.is_tensor(mask):
-                        mask = mask.cpu().numpy()
-                    # Convert numpy to list for JSON serialization
-                    if isinstance(mask, np.ndarray):
-                        det['mask'] = mask.tolist()
-                    else:
-                        det['mask'] = mask
-                    det['has_mask'] = True
-                else:
-                    det['mask'] = None
-                    det['has_mask'] = False
-            except Exception as e:
-                label = det.get('label', 'unknown')
-                logger.warning(f"SAM3 segmentation failed for {label}: {e}")
-                det['mask'] = None
-                det['has_mask'] = False
-
-            enhanced_detections.append(det)
+        # Format detections for output
+        formatted_detections = self._format_detections(result.detections)
 
         return {
-            'detections': enhanced_detections,
-            'num_detections': len(enhanced_detections),
-            'has_masks': True
+            'detections': formatted_detections,
+            'num_detections': result.num_detections,
+            'has_masks': any(d.get('has_mask', False) for d in formatted_detections),
+            'turns_taken': result.turns_taken,
+            'success': result.success,
+            'text_response': result.message,
+            'final_image': result.final_image
         }
 
-    def _parse_detections(
-        self,
-        response: str,
-        image_size: Tuple[int, int],
-        confidence_threshold: float = 0.7
-    ) -> List[Dict]:
+    def _format_detections(self, detections: List[Dict]) -> List[Dict]:
         """
-        Parse detection results from Qwen text response.
+        Format raw detections for output.
+
+        Adds color coding and normalizes fields.
 
         Args:
-            response: Text response from Qwen model
-            image_size: (width, height) of image
-            confidence_threshold: Minimum confidence
+            detections: Raw detections from agent
 
         Returns:
-            list: List of detection dicts with bbox, label, confidence
+            List of formatted detection dicts
         """
         from detector_unified import DEFECT_COLORS
 
-        detections = []
-        width, height = image_size
+        formatted = []
 
-        if "no defects detected" in response.lower():
-            return detections
+        for det in detections:
+            category = det.get('category', 'unknown')
+            mask = det.get('mask')
 
-        # Pattern: Defect: <type>, Box: [x1, y1, x2, y2], Confidence: <score>
-        # Also support pattern without confidence for backward compatibility
-        pattern_with_conf = r'Defect:\s*([^,\n]+),\s*Box:\s*\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\],\s*Confidence:\s*([\d.]+)'
-        pattern_no_conf = r'Defect:\s*([^,\n]+),\s*Box:\s*\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\]'
+            # Get color for category
+            color = DEFECT_COLORS.get(category, (0, 255, 0))
 
-        matches_with_conf = re.findall(pattern_with_conf, response, re.IGNORECASE)
-        matches_no_conf = re.findall(pattern_no_conf, response, re.IGNORECASE)
-
-        # Process matches with confidence first
-        for match in matches_with_conf:
-            try:
-                label = self._normalize_label(match[0].strip().lower())
-                confidence = float(match[5])
-
-                # Filter by confidence threshold
-                if confidence < confidence_threshold:
-                    logger.debug(f"Filtered out {label} with confidence {confidence:.2f} < {confidence_threshold}")
-                    continue
-
-                # Convert normalized 0-1000 coords to pixel coords
-                x1 = int(float(match[1]) * width / 1000)
-                y1 = int(float(match[2]) * height / 1000)
-                x2 = int(float(match[3]) * width / 1000)
-                y2 = int(float(match[4]) * height / 1000)
-
-                # Clamp to image bounds
-                x1 = max(0, min(x1, width))
-                y1 = max(0, min(y1, height))
-                x2 = max(0, min(x2, width))
-                y2 = max(0, min(y2, height))
-
-                # Validate bbox
-                if x2 > x1 and y2 > y1:
-                    color = DEFECT_COLORS.get(label, (0, 255, 0))
-
-                    # Create detailed SAM3 prompt
-                    sam3_description = self._create_sam3_prompt(label)
-
-                    detection = {
-                        "label": label,
-                        "category": label,
-                        "bbox": [x1, y1, x2, y2],
-                        "confidence": confidence,  # Use parsed confidence
-                        "color": color,
-                        "description": sam3_description  # Better prompt for SAM3
-                    }
-
-                    detections.append(detection)
-
-            except (ValueError, IndexError) as e:
-                logger.warning(f"Failed to parse detection: {match} ({e})")
-                continue
-
-        # Process matches without confidence (backward compatibility)
-        for match in matches_no_conf:
-            try:
-                label = self._normalize_label(match[0].strip().lower())
-
-                # Default confidence for backward compatibility
-                confidence = 0.8
-
-                # Filter by confidence threshold
-                if confidence < confidence_threshold:
-                    logger.debug(f"Filtered out {label} with default confidence {confidence:.2f} < {confidence_threshold}")
-                    continue
-
-                # Convert normalized 0-1000 coords to pixel coords
-                x1 = int(float(match[1]) * width / 1000)
-                y1 = int(float(match[2]) * height / 1000)
-                x2 = int(float(match[3]) * width / 1000)
-                y2 = int(float(match[4]) * height / 1000)
-
-                # Clamp to image bounds
-                x1 = max(0, min(x1, width))
-                y1 = max(0, min(y1, height))
-                x2 = max(0, min(x2, width))
-                y2 = max(0, min(y2, height))
-
-                # Validate bbox
-                if x2 > x1 and y2 > y1:
-                    color = DEFECT_COLORS.get(label, (0, 255, 0))
-
-                    # Create detailed SAM3 prompt
-                    sam3_description = self._create_sam3_prompt(label)
-
-                    detection = {
-                        "label": label,
-                        "category": label,
-                        "bbox": [x1, y1, x2, y2],
-                        "confidence": confidence,
-                        "color": color,
-                        "description": sam3_description  # Better prompt for SAM3
-                    }
-
-                    detections.append(detection)
-
-            except (ValueError, IndexError) as e:
-                logger.warning(f"Failed to parse detection: {match} ({e})")
-                continue
-
-        return detections
-
-    def _normalize_label(self, label: str) -> str:
-        """Normalize detected label to match predefined categories."""
-        from detector_unified import INFRASTRUCTURE_CATEGORIES
-
-        label = label.lower().strip()
-
-        # Direct match
-        if label in INFRASTRUCTURE_CATEGORIES:
-            return label
-
-        # Keyword matching
-        label_mappings = {
-            "pothole": "potholes",
-            "hole": "potholes",
-            "alligator crack": "alligator_cracks",
-            "alligator": "alligator_cracks",
-            "longitudinal crack": "longitudinal_cracks",
-            "longitudinal": "longitudinal_cracks",
-            "transverse crack": "transverse_cracks",
-            "transverse": "transverse_cracks",
-            "vehicle": "abandoned_vehicle",
-            "car": "abandoned_vehicle",
-            "encampment": "homeless_encampment",
-            "tent": "homeless_encampment",
-            "homeless": "homeless_person",
-            "person": "homeless_person",
-            "manhole": "manholes",
-            "paint": "damaged_paint",
-            "crosswalk": "damaged_crosswalks",
-            "trash": "dumped_trash",
-            "sign": "street_signs",
-            "light": "traffic_lights",
-            "tyre": "tyre_marks",
-            "tire": "tyre_marks"
-        }
-
-        for keyword, category in label_mappings.items():
-            if keyword in label:
-                return category
-
-        return label
-
-    def _create_sam3_prompt(self, category: str) -> str:
-        """
-        Create detailed SAM3 prompt from category.
-
-        SAM3 needs descriptive prompts to segment accurately.
-        Simple category names like "potholes" are too vague.
-        """
-        prompts = {
-            "potholes": "a hole or depression in the road pavement surface",
-            "alligator_cracks": "a network of interconnected cracks forming a pattern on the pavement",
-            "longitudinal_cracks": "a crack running parallel along the direction of the road",
-            "transverse_cracks": "a crack running across the width of the road perpendicular to traffic",
-            "road_surface_damage": "deteriorated or damaged road pavement surface",
-            "abandoned_vehicle": "a damaged, broken down, or abandoned vehicle",
-            "homeless_encampment": "a tent, tarp, or makeshift shelter structure",
-            "homeless_person": "a person with belongings or bedding in a public area",
-            "manholes": "a round or square metal manhole cover on the road",
-            "damaged_paint": "faded, worn, or deteriorated road paint markings",
-            "damaged_crosswalks": "faded or worn pedestrian crosswalk stripes on the road",
-            "dumped_trash": "trash, garbage, debris, or discarded items",
-            "street_signs": "a traffic sign or road sign mounted on a pole",
-            "traffic_lights": "a traffic signal light with colored lights for vehicles",
-            "tyre_marks": "dark rubber tire marks or skid marks on the pavement"
-        }
-        return prompts.get(category, category)
-
-    def _segment_with_sam3(
-        self,
-        image: Union[Image.Image, str],
-        query: str = None,
-        bbox: List[int] = None
-    ) -> Optional[np.ndarray]:
-        """
-        Segment an object using SAM3 with geometric prompt (preferred) or text prompt.
-
-        Args:
-            image: PIL Image or path
-            query: Text description of what to segment (fallback)
-            bbox: Bounding box [x1, y1, x2, y2] in pixel coordinates (preferred)
-
-        Returns:
-            np.ndarray: Segmentation mask or None if failed
-        """
-        try:
-            # Convert to PIL if needed
-            if isinstance(image, str):
-                image = Image.open(image).convert('RGB')
-
-            # Get image dimensions for normalization
-            img_width, img_height = image.size
-
-            # Step 1: Set the image and get inference state
-            inference_state = self.sam3_processor.set_image(image)
-
-            # PRIORITY 1: Use bounding box if available (more accurate)
-            if bbox is not None and len(bbox) == 4:
-                x1, y1, x2, y2 = bbox
-
-                # Convert [x1, y1, x2, y2] to [center_x, center_y, width, height] normalized
-                center_x = ((x1 + x2) / 2) / img_width
-                center_y = ((y1 + y2) / 2) / img_height
-                width = (x2 - x1) / img_width
-                height = (y2 - y1) / img_height
-
-                # SAM3 expects: [center_x, center_y, width, height] normalized to [0, 1]
-                box_normalized = [center_x, center_y, width, height]
-
-                # Use geometric prompt (box-based segmentation)
-                self.sam3_processor.add_geometric_prompt(
-                    box=box_normalized,
-                    label=True,  # True = positive prompt (include this region)
-                    state=inference_state
-                )
-
-                # Retrieve results from state
-                masks = inference_state.get('masks', [])
-
-            # FALLBACK: Use text prompt
-            elif query is not None:
-                output = self.sam3_processor.set_text_prompt(
-                    state=inference_state,
-                    prompt=query
-                )
-                # Extract masks from output
-                if isinstance(output, dict) and 'masks' in output:
-                    masks = output['masks']
+            # Convert mask to list if numpy array
+            if mask is not None:
+                if hasattr(mask, 'tolist'):
+                    mask_list = mask.tolist()
+                elif isinstance(mask, np.ndarray):
+                    mask_list = mask.tolist()
                 else:
-                    logger.warning(f"Unexpected SAM3 output format: {type(output)}")
-                    return None
+                    mask_list = mask
+                has_mask = True
             else:
-                logger.error("SAM3 called without bbox or query")
-                return None
+                mask_list = None
+                has_mask = False
 
-            # Extract masks with better logging
-            if masks is not None and len(masks) > 0:
-                logger.debug(f"SAM3 returned {len(masks)} masks for bbox={bbox}")
-                return masks[0]  # Return highest confidence mask
-            else:
-                logger.warning(f"SAM3 returned 0 masks for bbox={bbox}, query={query}")
-                return None
+            formatted.append({
+                'label': category,
+                'category': category,
+                'bbox': det.get('bbox', [0, 0, 0, 0]),
+                'confidence': det.get('confidence', 0.0),
+                'severity': det.get('severity', 'low'),
+                'description': det.get('description', ''),
+                'color': color,
+                'mask': mask_list,
+                'has_mask': has_mask,
+                'mask_id': det.get('mask_id')
+            })
 
-        except Exception as e:
-            logger.error(f"SAM3 segmentation error: {e}", exc_info=True)
-            return None
+        return formatted
 
     def detect_infrastructure_batch(
         self,
@@ -474,15 +232,38 @@ class InfrastructureDetectionAgentHF:
         """
         Batch detection with agentic SAM3 segmentation.
 
+        Note: Each image runs through the full agentic loop independently.
+        This is not true batch processing but sequential processing for
+        multiple images.
+
         Args:
             images: List of PIL Images or image paths
-            use_sam3: If True, add SAM3 segmentation
+            use_sam3: If True, use SAM3 for segmentation
 
         Returns:
-            List of detection dictionaries
+            List of detection results, one per image
         """
         results = []
-        for image in images:
+
+        for i, image in enumerate(images):
+            print(f"\nProcessing image {i+1}/{len(images)}...")
             result = self.detect_infrastructure(image, use_sam3=use_sam3)
             results.append(result)
+
         return results
+
+    def cleanup(self):
+        """Clean up models and free GPU memory."""
+        import torch
+
+        if hasattr(self.qwen_detector, 'cleanup'):
+            self.qwen_detector.cleanup()
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        print("GPU memory cleared")
+
+
+# Backwards compatibility alias
+InfrastructureDetectionAgent = InfrastructureDetectionAgentHF
