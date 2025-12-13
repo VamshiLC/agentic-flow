@@ -47,7 +47,8 @@ class AgentConfig:
     debug_dir: str = "debug"  # Debug output directory
     prune_after_turns: int = 15  # Prune messages after N turns
     auto_exit_on_masks: bool = False  # Don't auto exit - let LLM decide
-    force_all_categories: bool = False  # Use smart LLM-driven search
+    force_all_categories: bool = True  # Search ALL categories with SAM3
+    validate_with_llm: bool = True  # Use LLM to validate/reject false positives
 
 
 @dataclass
@@ -124,44 +125,65 @@ class InfrastructureDetectionAgentCore:
 
     def _run_direct_category_search(self, image: Image.Image) -> AgentResult:
         """
-        Directly search for ALL categories without relying on LLM decisions.
+        Search ALL categories with SAM3, then optionally validate with LLM.
 
-        This is faster and more reliable - we call SAM3 once for each category.
+        This is the HYBRID approach:
+        1. SAM3 searches ALL 17 categories (comprehensive)
+        2. LLM validates each mask to reject false positives (smart)
         """
         start_time = time.time()
 
-        # Get categories to search
+        # ALL categories to search - comprehensive list
         if self.config.categories:
             categories = self.config.categories
         else:
             categories = [
-                "pothole", "alligator crack", "longitudinal crack", "transverse crack",
-                "road damage", "abandoned vehicle", "homeless encampment", "tent",
-                "manhole", "damaged road marking", "crosswalk", "trash", "debris",
-                "street sign", "traffic light", "tyre mark", "skid mark"
+                # Critical defects
+                "pothole", "alligator crack", "road crack", "pavement crack",
+                # Surface damage
+                "longitudinal crack", "transverse crack", "road damage",
+                # Objects on road
+                "abandoned vehicle", "abandoned car", "debris", "trash", "garbage",
+                # Infrastructure
+                "manhole", "manhole cover", "street sign", "traffic sign",
+                "traffic light", "crosswalk", "road marking",
+                # Encampments
+                "tent", "homeless encampment",
+                # Marks
+                "tyre mark", "skid mark"
             ]
 
-        logger.info(f"Direct search for {len(categories)} categories")
+        logger.info(f"=== SEARCHING ALL {len(categories)} CATEGORIES ===")
 
         # Initialize tool executor
         tool_executor = ToolExecutor(self.sam3_processor, image)
 
-        # Search each category
+        # Search EVERY category
+        found_categories = []
         for i, category in enumerate(categories):
-            logger.info(f"[{i+1}/{len(categories)}] Searching for: {category}")
+            logger.info(f"[{i+1}/{len(categories)}] Searching: {category}")
 
             try:
                 result = tool_executor.execute("segment_phrase", {"text_prompt": category})
                 if result.success and result.data.get("num_masks", 0) > 0:
-                    logger.info(f"  Found {result.data['num_masks']} mask(s) for '{category}'")
+                    num_found = result.data['num_masks']
+                    logger.info(f"  ✓ Found {num_found} mask(s) for '{category}'")
+                    found_categories.append(category)
                 else:
-                    logger.info(f"  No masks found for '{category}'")
+                    logger.debug(f"  ✗ No masks for '{category}'")
             except Exception as e:
                 logger.warning(f"  Error searching '{category}': {e}")
 
-        # Compile all masks found
+        # Get all masks found
         masks = tool_executor.get_all_masks()
+        logger.info(f"=== TOTAL: {len(masks)} masks from {len(found_categories)} categories ===")
 
+        # Optional: LLM validation to reject false positives
+        if self.config.validate_with_llm and masks:
+            masks = self._validate_masks_with_llm(image, masks, tool_executor)
+            logger.info(f"After LLM validation: {len(masks)} masks remaining")
+
+        # Build final detections
         if masks:
             detections = [
                 {
@@ -180,7 +202,7 @@ class InfrastructureDetectionAgentCore:
             final_image = image
 
         elapsed = time.time() - start_time
-        logger.info(f"Direct search complete: {len(detections)} detections in {elapsed:.2f}s")
+        logger.info(f"Detection complete: {len(detections)} issues in {elapsed:.2f}s")
 
         return AgentResult(
             success=True,
@@ -188,8 +210,113 @@ class InfrastructureDetectionAgentCore:
             num_detections=len(detections),
             final_image=final_image,
             turns_taken=len(categories),
-            message=f"Found {len(detections)} infrastructure issues across {len(categories)} categories"
+            message=f"Found {len(detections)} infrastructure issues across {len(found_categories)} categories"
         )
+
+    def _validate_masks_with_llm(
+        self,
+        image: Image.Image,
+        masks: List,
+        tool_executor: ToolExecutor
+    ) -> List:
+        """
+        Use LLM to validate masks and reject false positives (shadows, etc).
+
+        Args:
+            image: Original image
+            masks: List of MaskData objects
+            tool_executor: Tool executor for rendering
+
+        Returns:
+            Filtered list of validated masks
+        """
+        if not masks:
+            return masks
+
+        logger.info(f"Validating {len(masks)} masks with LLM...")
+
+        # Render all masks for LLM to see
+        rendered_image = tool_executor._render_masks(masks)
+
+        # Build validation prompt
+        mask_list = "\n".join([
+            f"- Mask {m.mask_id}: {m.category} (confidence: {m.score:.2f})"
+            for m in masks
+        ])
+
+        validation_prompt = f"""Look at this road image with detected masks.
+
+DETECTED MASKS:
+{mask_list}
+
+For EACH mask, tell me if it's REAL or FALSE POSITIVE:
+- REAL: Actual infrastructure issue (pothole, crack, sign, etc.)
+- FALSE: Shadow, reflection, normal road texture, wet spot
+
+Reply with ONLY the mask IDs that are REAL issues.
+Format: KEEP: 1, 3, 5
+Or if all are false: KEEP: none"""
+
+        try:
+            # Call LLM for validation
+            result = self.qwen_detector.detect(rendered_image, validation_prompt)
+
+            if result.get("success"):
+                response = result.get("text", "")
+                logger.info(f"LLM validation response: {response[:200]}")
+
+                # Parse which masks to keep
+                keep_ids = self._parse_keep_ids(response, masks)
+
+                if keep_ids:
+                    validated_masks = [m for m in masks if m.mask_id in keep_ids]
+                    rejected_count = len(masks) - len(validated_masks)
+                    logger.info(f"LLM rejected {rejected_count} false positives")
+                    return validated_masks
+                else:
+                    # If parsing fails, keep all masks
+                    logger.warning("Could not parse LLM validation, keeping all masks")
+                    return masks
+            else:
+                logger.warning("LLM validation failed, keeping all masks")
+                return masks
+
+        except Exception as e:
+            logger.error(f"LLM validation error: {e}")
+            return masks
+
+    def _parse_keep_ids(self, response: str, masks: List) -> List[int]:
+        """Parse mask IDs to keep from LLM response."""
+        import re
+
+        response_lower = response.lower()
+
+        # Check for "none" - all are false positives
+        if "keep: none" in response_lower or "keep:none" in response_lower:
+            return []
+
+        # Try to find KEEP: pattern
+        keep_match = re.search(r'keep[:\s]+([0-9,\s]+)', response_lower)
+        if keep_match:
+            ids_str = keep_match.group(1)
+            try:
+                keep_ids = [int(x.strip()) for x in ids_str.split(",") if x.strip().isdigit()]
+                # Validate IDs exist
+                valid_ids = {m.mask_id for m in masks}
+                return [id for id in keep_ids if id in valid_ids]
+            except:
+                pass
+
+        # Try to find any numbers mentioned as valid
+        numbers = re.findall(r'\b(\d+)\b', response)
+        if numbers:
+            valid_ids = {m.mask_id for m in masks}
+            found_ids = [int(n) for n in numbers if int(n) in valid_ids]
+            if found_ids:
+                return found_ids
+
+        # Default: keep all if can't parse
+        return [m.mask_id for m in masks]
 
     def _run_agentic_loop(
         self,

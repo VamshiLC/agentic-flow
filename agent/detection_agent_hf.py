@@ -142,12 +142,14 @@ class InfrastructureDetectionAgentHF:
         if user_query is None:
             user_query = "Analyze this road image and detect all infrastructure issues."
 
-        # Create agent config
+        # Create agent config - HYBRID mode: search ALL categories, validate with LLM
         config = AgentConfig(
             max_turns=self.max_turns,
             categories=self.categories,
             debug=self.debug,
-            debug_dir="debug"
+            debug_dir="debug",
+            force_all_categories=True,  # Search ALL 22 categories with SAM3
+            validate_with_llm=True,  # Use LLM to reject false positives
         )
 
         # Create and run agent
