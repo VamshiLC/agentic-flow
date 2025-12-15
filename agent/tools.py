@@ -97,6 +97,10 @@ class ToolExecutor:
             logger.error(f"Failed to initialize SAM3: {e}")
             raise
 
+    def get_current_masks(self) -> List[MaskData]:
+        """Return all accumulated masks."""
+        return self.masks
+
     def execute(self, tool_name: str, parameters: Dict[str, Any]) -> ToolResult:
         """
         Execute a tool by name.
