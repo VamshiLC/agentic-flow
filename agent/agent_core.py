@@ -561,16 +561,9 @@ IMPORTANT: Be STRICT. Only Accept if the mask clearly shows the claimed object t
         SIMPLE: Ask Qwen what infrastructure issues it sees.
         Returns list of things to search with SAM3.
         """
-        detection_prompt = """Look at this image. List any of these if you see them:
-- graffiti or spray paint
-- potholes or holes in road
-- cracks in pavement
-- manholes (round metal covers)
-- debris or trash
-- damaged signs
-- damaged lights
-
-Just list what you see, one per line. If you don't see any issues, say "none"."""
+        detection_prompt = """Describe this image in detail. What do you see?
+Look for: walls, text on walls, road surface, metal covers, signs, lights.
+Describe everything visible."""
 
         try:
             result = self.qwen_detector.detect(image, detection_prompt)
@@ -582,19 +575,33 @@ Just list what you see, one per line. If you don't see any issues, say "none".""
             response = result.get("text", "").lower()
             print(f"Qwen says: {response}")
 
-            # Extract what Qwen found
+            # Extract what Qwen found - expanded keywords
             found_items = []
             keywords = {
                 'graffiti': 'graffiti',
                 'spray paint': 'graffiti',
+                'spray-paint': 'graffiti',
+                'painted': 'graffiti',
+                'writing on wall': 'graffiti',
+                'text on wall': 'graffiti',
+                'vandal': 'graffiti',
                 'tag': 'graffiti',
+                'mural': 'graffiti',
+                'street art': 'graffiti',
                 'pothole': 'pothole',
-                'hole': 'pothole',
+                'hole in road': 'pothole',
+                'road damage': 'pothole',
                 'crack': 'crack',
+                'fracture': 'crack',
                 'manhole': 'manhole',
+                'metal cover': 'manhole',
+                'utility cover': 'manhole',
+                'sewer': 'manhole',
+                'drain': 'manhole',
                 'debris': 'debris',
                 'trash': 'debris',
                 'garbage': 'debris',
+                'litter': 'debris',
                 'damaged sign': 'damaged sign',
                 'broken sign': 'damaged sign',
                 'damaged light': 'damaged light',
