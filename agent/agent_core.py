@@ -176,218 +176,123 @@ class InfrastructureDetectionAgentCore:
 
     def _run_direct_category_search(self, image: Image.Image) -> AgentResult:
         """
-        QWEN ONLY - Just detect and draw bounding boxes.
-        NO SAM3 segmentation - clean output like qwen.png.
+        SIMPLE approach:
+        1. Qwen looks at image and says what infrastructure issues it sees (plain text)
+        2. SAM3 segments those things using text prompts
+
+        NO JSON, NO BOUNDING BOXES - just simple text.
         """
         start_time = time.time()
-        from PIL import ImageDraw, ImageFont
+
+        # Initialize tool executor
+        tool_executor = ToolExecutor(self.sam3_processor, image)
+
+        # If user specified categories, skip Qwen and search directly
+        if self.config.categories:
+            return self._run_text_prompt_search(image, self.config.categories, tool_executor, start_time)
 
         print(f"\n{'='*60}")
-        print(f"QWEN DETECTION (Bounding Boxes Only)")
+        print(f"SMART DETECTION MODE")
+        print(f"Step 1: Asking Qwen what it sees...")
         print(f"{'='*60}")
 
-        # Ask Qwen to detect objects with bounding boxes
-        detections = self._ask_qwen_to_detect_with_boxes(image)
+        # Ask Qwen what infrastructure issues it sees (simple text response)
+        found_items = self._ask_qwen_what_it_sees(image)
 
-        # Filter by user categories if specified
-        if self.config.categories and detections:
-            user_cats = [c.lower().strip() for c in self.config.categories]
-            filtered = []
-            for det in detections:
-                label = det['label'].lower().strip()
-                for cat in user_cats:
-                    if cat in label or label in cat:
-                        filtered.append(det)
-                        break
-            print(f"Filtering to match: {self.config.categories}")
-            print(f"  Before: {len(detections)}, After: {len(filtered)}")
-            detections = filtered
+        if not found_items:
+            print("Qwen didn't identify any specific issues.")
+            print("Falling back to searching ALL categories...")
+            # Fallback: search ALL infrastructure categories
+            from .system_prompt import get_categories
+            found_items = list(get_categories().keys())
 
-        if not detections:
-            print("No infrastructure issues detected.")
-            return AgentResult(
-                success=True,
-                detections=[],
-                num_detections=0,
-                final_image=image,
-                turns_taken=1,
-                message="No infrastructure issues detected"
-            )
+        # MEMORY OPTIMIZATION: Clear Qwen from GPU before SAM3 segmentation
+        if self.config.optimize_memory:
+            self._optimize_memory_before_sam3()
 
-        print(f"\nQwen found {len(detections)} objects:")
-        for det in detections:
-            print(f"  - {det['label']} at {det['bbox']}")
+        print(f"\n{'='*60}")
+        print(f"Step 2: SAM3 searching for: {found_items}")
+        print(f"{'='*60}")
 
-        # Draw bounding boxes on image (NO SAM3)
-        result_image = image.copy()
-        draw = ImageDraw.Draw(result_image)
-
-        # Colors for different categories
-        colors = {
-            'pothole': (255, 0, 0),        # Red
-            'crack': (255, 165, 0),        # Orange
-            'manhole': (0, 255, 0),        # Green
-            'graffiti': (255, 0, 255),     # Magenta
-            'trash': (139, 69, 19),        # Brown
-            'tent': (0, 255, 255),         # Cyan
-            'homeless': (0, 255, 255),     # Cyan
-            'encampment': (0, 255, 255),   # Cyan
-            'car': (0, 0, 255),            # Blue
-            'vehicle': (0, 0, 255),        # Blue
-            'abandoned': (0, 0, 255),      # Blue
-        }
-
-        # Try to load a font
-        try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
-        except:
+        # SAM3 segments using text prompts
+        all_masks = []
+        for item in found_items:
+            print(f"  Searching '{item}'...", end=" ", flush=True)
             try:
-                font = ImageFont.truetype("/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf", 16)
-            except:
-                font = ImageFont.load_default()
+                result = tool_executor.execute("segment_phrase", {"text_prompt": item})
+                if result.success and result.data.get("num_masks", 0) > 0:
+                    num_found = result.data['num_masks']
+                    print(f"✓ {num_found} found")
+                else:
+                    print("✗ none")
+            except Exception as e:
+                print(f"✗ error: {e}")
 
-        final_detections = []
-        for i, det in enumerate(detections):
-            label = det['label']
-            bbox = det['bbox']
-            confidence = det.get('confidence', 0.8)
-            x1, y1, x2, y2 = bbox
+        # Get all accumulated masks
+        masks = tool_executor.get_current_masks()
 
-            # Get color for this category
-            color = (255, 255, 0)  # Default yellow
-            for key, c in colors.items():
-                if key in label.lower():
-                    color = c
-                    break
+        # CONFIDENCE FILTERING - Remove low confidence detections
+        if masks:
+            before_count = len(masks)
+            masks = [m for m in masks if m.score >= self.config.confidence_threshold]
+            filtered = before_count - len(masks)
+            if filtered > 0:
+                print(f"  Filtered {filtered} low-confidence detections (threshold: {self.config.confidence_threshold})")
+            print(f"  Keeping {len(masks)} high-confidence detections")
 
-            # Draw bounding box
-            draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
+        # LLM VALIDATION - Filter out false positives (manholes as potholes, shadows, etc)
+        if masks and self.config.validate_with_llm:
+            print(f"\n{'='*60}")
+            print(f"Step 3: LLM validating {len(masks)} detections...")
+            print(f"{'='*60}")
+            # Reload Qwen to GPU for validation
+            if self.config.optimize_memory:
+                self._reload_qwen_to_gpu()
+            masks = self._validate_masks_with_llm(image, masks, tool_executor)
+            print(f"After validation: {len(masks)} masks kept")
 
-            # Draw label background
-            text = f"{label}"
-            text_bbox = draw.textbbox((x1, y1 - 20), text, font=font)
-            draw.rectangle([text_bbox[0] - 2, text_bbox[1] - 2, text_bbox[2] + 2, text_bbox[3] + 2], fill=color)
-            draw.text((x1, y1 - 20), text, fill=(0, 0, 0), font=font)
+        # Build final detections
+        if masks:
+            print(f"\n{'='*60}")
+            print(f"Step 4: Rendering {len(masks)} masks on image...")
+            print(f"{'='*60}")
 
-            final_detections.append({
-                "mask_id": i + 1,
-                "category": label,
-                "severity": "medium",
-                "confidence": confidence,
-                "bbox": bbox,
-                "mask": None,  # No mask - just bounding box
-            })
+            detections = [
+                {
+                    "mask_id": m.mask_id,
+                    "category": m.category,
+                    "severity": tool_executor._category_to_severity(m.category),
+                    "confidence": m.score,
+                    "bbox": m.bbox,
+                    "mask": m.mask,
+                }
+                for m in masks
+            ]
+            final_image = tool_executor._render_masks(masks)
+            print(f"✓ Detection complete!")
+
+            # Summary
+            categories_found = list(set(m.category for m in masks))
+            print(f"\n{'='*60}")
+            print(f"RESULTS: {len(masks)} objects detected")
+            print(f"Categories: {categories_found}")
+            print(f"{'='*60}")
+        else:
+            print("\n⚠ No objects found")
+            detections = []
+            final_image = image
 
         elapsed = time.time() - start_time
-        print(f"\n{'='*60}")
-        print(f"RESULTS: {len(final_detections)} objects detected")
-        print(f"Time: {elapsed:.2f}s")
-        print(f"{'='*60}")
+        logger.info(f"Detection complete: {len(detections)} issues in {elapsed:.2f}s")
 
         return AgentResult(
             success=True,
-            detections=final_detections,
-            num_detections=len(final_detections),
-            final_image=result_image,
+            detections=detections,
+            num_detections=len(detections),
+            final_image=final_image,
             turns_taken=1,
-            message=f"Found {len(final_detections)} infrastructure issues"
+            message=f"Found {len(detections)} infrastructure issues"
         )
-
-    def _ask_qwen_to_detect_with_boxes(self, image: Image.Image) -> List[Dict]:
-        """
-        Ask Qwen to find objects AND their bounding boxes.
-        Returns: [{"label": "pothole", "bbox": [x1,y1,x2,y2], "confidence": 0.8}, ...]
-        """
-        img_width, img_height = image.size
-
-        grounding_prompt = f"""Analyze this street/road image and detect ALL infrastructure problems.
-
-DETECT these categories (with bounding boxes):
-- pothole: Holes in road
-- crack: Cracks in pavement
-- manhole: Metal covers on road
-- graffiti: Spray paint on walls
-- trash: Garbage, litter
-- tent: Tents, encampments, homeless shelters
-- abandoned vehicle: Damaged/abandoned cars
-
-OUTPUT FORMAT - Return JSON array:
-[
-  {{"label": "pothole", "bbox_2d": [x1, y1, x2, y2]}},
-  {{"label": "crack", "bbox_2d": [x1, y1, x2, y2]}}
-]
-
-Coordinates in PIXELS. Image size: {img_width}x{img_height}.
-If nothing found, return: []"""
-
-        try:
-            result = self.qwen_detector.detect(image, grounding_prompt)
-            if not result.get("success"):
-                return []
-
-            response = result.get("text", "")
-            return self._parse_json_detection_response(response, img_width, img_height)
-
-        except Exception as e:
-            logger.error(f"Qwen detection error: {e}")
-            return []
-
-    def _parse_json_detection_response(self, response: str, img_width: int, img_height: int) -> List[Dict]:
-        """Parse Qwen's JSON response to extract detections."""
-        import json
-
-        detections = []
-        json_str = None
-
-        try:
-            # Find JSON in ```json code block
-            if '```json' in response:
-                start = response.find('```json') + 7
-                end = response.find('```', start)
-                if end != -1:
-                    json_str = response[start:end].strip()
-
-            # Or find [...] array
-            if not json_str:
-                start_idx = response.find('[')
-                if start_idx != -1:
-                    bracket_count = 0
-                    for i, char in enumerate(response[start_idx:], start_idx):
-                        if char == '[':
-                            bracket_count += 1
-                        elif char == ']':
-                            bracket_count -= 1
-                            if bracket_count == 0:
-                                json_str = response[start_idx:i+1]
-                                break
-
-            if json_str:
-                parsed = json.loads(json_str)
-                if isinstance(parsed, list):
-                    for item in parsed:
-                        if isinstance(item, dict):
-                            bbox = item.get('bbox_2d') or item.get('bbox')
-                            label = item.get('label', 'unknown')
-
-                            if bbox and len(bbox) == 4:
-                                x1, y1, x2, y2 = [int(float(b)) for b in bbox]
-                                # Clamp to image bounds
-                                x1 = max(0, min(x1, img_width))
-                                y1 = max(0, min(y1, img_height))
-                                x2 = max(0, min(x2, img_width))
-                                y2 = max(0, min(y2, img_height))
-
-                                if x1 < x2 and y1 < y2:
-                                    detections.append({
-                                        'label': label,
-                                        'bbox': [x1, y1, x2, y2],
-                                        'confidence': item.get('confidence', 0.8)
-                                    })
-
-        except Exception as e:
-            logger.debug(f"JSON parse failed: {e}")
-
-        return detections
 
     def _run_text_prompt_search(
         self,
