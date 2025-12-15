@@ -201,9 +201,10 @@ class InfrastructureDetectionAgentCore:
 
         if not found_items:
             print("Qwen didn't identify any specific issues.")
-            print("Falling back to basic search...")
-            # Fallback: search only common issues (not everything)
-            found_items = ['pothole', 'manhole', 'graffiti']
+            print("Falling back to searching ALL categories...")
+            # Fallback: search ALL infrastructure categories
+            from .system_prompt import get_categories
+            found_items = list(get_categories().keys())
 
         # MEMORY OPTIMIZATION: Clear Qwen from GPU before SAM3 segmentation
         if self.config.optimize_memory:
@@ -587,20 +588,42 @@ Describe everything visible."""
             print(f"Qwen says: {response}")
 
             # Extract what Qwen found - map to search terms
-            # BE SPECIFIC - don't match generic words
+            # Extract ALL infrastructure issues from Qwen's description
             found_items = []
             keywords = {
-                # Graffiti - specific terms
+                # Graffiti
                 'graffiti': 'graffiti',
                 'spray paint': 'graffiti',
                 'vandalism': 'graffiti',
-                # Road damage - specific terms only
+                'painted': 'graffiti',
+                'mural': 'graffiti',
+                # Road damage
                 'pothole': 'pothole',
                 'potholes': 'pothole',
-                # Don't trigger on "cracked" - too generic
-                # Manholes - specific
+                'crack': 'crack',
+                'cracked': 'crack',
+                'damage': 'road damage',
+                # Manholes
                 'manhole': 'manhole',
                 'manhole cover': 'manhole',
+                'metal cover': 'manhole',
+                'grate': 'manhole',
+                'drain': 'manhole',
+                # Debris
+                'debris': 'debris',
+                'trash': 'trash',
+                'garbage': 'trash',
+                'litter': 'trash',
+                # Signs
+                'sign': 'sign',
+                'traffic sign': 'traffic sign',
+                'street sign': 'street sign',
+                # Lights
+                'traffic light': 'traffic light',
+                'street light': 'street light',
+                # Crosswalk
+                'crosswalk': 'crosswalk',
+                'pedestrian crossing': 'crosswalk',
             }
 
             for keyword, label in keywords.items():
