@@ -376,11 +376,14 @@ IMPORTANT: Be STRICT. Only Accept if the mask clearly shows the claimed object t
                         print("? Unclear → Reject (strict mode)")
                         logger.info(f"Mask {mask.mask_id} rejected (unclear): {mask.category}")
                 else:
-                    print("? LLM Error → Reject")
+                    # LLM error (likely OOM) - keep the mask rather than reject
+                    print("? LLM Error → Keep (fallback)")
+                    validated_masks.append(mask)
 
             except Exception as e:
-                print(f"? Error: {e} → Reject")
+                print(f"? Error: {e} → Keep (fallback)")
                 logger.error(f"Validation error for mask {mask.mask_id}: {e}")
+                validated_masks.append(mask)  # Keep on error
 
         rejected_count = len(masks) - len(validated_masks)
         print(f"\n{'='*50}")

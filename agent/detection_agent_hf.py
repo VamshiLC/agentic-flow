@@ -41,7 +41,7 @@ class InfrastructureDetectionAgentHF:
 
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen2.5-VL-7B-Instruct",  # 8B model for better accuracy
+        model_name: str = "Qwen/Qwen2.5-VL-3B-Instruct",  # 3B to fit with SAM3 on 22GB GPU
         sam3_processor=None,
         categories: Optional[List[str]] = None,
         device: Optional[str] = None,
