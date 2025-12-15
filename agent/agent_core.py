@@ -176,123 +176,172 @@ class InfrastructureDetectionAgentCore:
 
     def _run_direct_category_search(self, image: Image.Image) -> AgentResult:
         """
-        SIMPLE approach:
-        1. Qwen looks at image and says what infrastructure issues it sees (plain text)
-        2. SAM3 segments those things using text prompts
-
-        NO JSON, NO BOUNDING BOXES - just simple text.
+        QWEN ONLY - Clean bounding box detection.
+        NO SAM3 - just Qwen detecting and drawing boxes.
         """
         start_time = time.time()
-
-        # Initialize tool executor
-        tool_executor = ToolExecutor(self.sam3_processor, image)
-
-        # If user specified categories, skip Qwen and search directly
-        if self.config.categories:
-            return self._run_text_prompt_search(image, self.config.categories, tool_executor, start_time)
+        from PIL import ImageDraw, ImageFont
 
         print(f"\n{'='*60}")
-        print(f"SMART DETECTION MODE")
-        print(f"Step 1: Asking Qwen what it sees...")
+        print(f"QWEN DETECTION (Bounding Boxes Only)")
         print(f"{'='*60}")
 
-        # Ask Qwen what infrastructure issues it sees (simple text response)
-        found_items = self._ask_qwen_what_it_sees(image)
+        # Ask Qwen to detect with bounding boxes
+        detections = self._ask_qwen_to_detect_with_boxes(image)
 
-        if not found_items:
-            print("Qwen didn't identify any specific issues.")
-            print("Falling back to searching ALL categories...")
-            # Fallback: search ALL infrastructure categories
-            from .system_prompt import get_categories
-            found_items = list(get_categories().keys())
+        # Filter by user categories if specified
+        if self.config.categories and detections:
+            user_cats = [c.lower().strip() for c in self.config.categories]
+            filtered = []
+            for det in detections:
+                label = det['label'].lower().strip()
+                for cat in user_cats:
+                    if cat in label or label in cat:
+                        filtered.append(det)
+                        break
+            print(f"Filtering: {len(detections)} -> {len(filtered)}")
+            detections = filtered
 
-        # MEMORY OPTIMIZATION: Clear Qwen from GPU before SAM3 segmentation
-        if self.config.optimize_memory:
-            self._optimize_memory_before_sam3()
+        if not detections:
+            print("No infrastructure issues detected.")
+            return AgentResult(
+                success=True, detections=[], num_detections=0,
+                final_image=image, turns_taken=1,
+                message="No infrastructure issues detected"
+            )
 
-        print(f"\n{'='*60}")
-        print(f"Step 2: SAM3 searching for: {found_items}")
-        print(f"{'='*60}")
+        print(f"\nQwen found {len(detections)} objects:")
+        for det in detections:
+            print(f"  - {det['label']} at {det['bbox']}")
 
-        # SAM3 segments using text prompts
-        all_masks = []
-        for item in found_items:
-            print(f"  Searching '{item}'...", end=" ", flush=True)
+        # Draw bounding boxes
+        result_image = image.copy()
+        draw = ImageDraw.Draw(result_image)
+
+        colors = {
+            'pothole': (255, 0, 0), 'crack': (255, 165, 0),
+            'manhole': (0, 255, 0), 'graffiti': (255, 0, 255),
+            'trash': (139, 69, 19), 'tent': (0, 255, 255),
+            'homeless': (0, 255, 255), 'encampment': (0, 255, 255),
+            'abandoned': (128, 0, 128),
+        }
+
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
+        except:
+            font = ImageFont.load_default()
+
+        final_detections = []
+        for i, det in enumerate(detections):
+            label = det['label']
+            x1, y1, x2, y2 = det['bbox']
+            confidence = det.get('confidence', 0.8)
+
+            color = (255, 255, 0)
+            for key, c in colors.items():
+                if key in label.lower():
+                    color = c
+                    break
+
+            draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
             try:
-                result = tool_executor.execute("segment_phrase", {"text_prompt": item})
-                if result.success and result.data.get("num_masks", 0) > 0:
-                    num_found = result.data['num_masks']
-                    print(f"✓ {num_found} found")
-                else:
-                    print("✗ none")
-            except Exception as e:
-                print(f"✗ error: {e}")
+                text_bbox = draw.textbbox((x1, y1 - 20), label, font=font)
+                draw.rectangle([text_bbox[0]-2, text_bbox[1]-2, text_bbox[2]+2, text_bbox[3]+2], fill=color)
+                draw.text((x1, y1 - 20), label, fill=(0, 0, 0), font=font)
+            except:
+                draw.text((x1, y1 - 15), label, fill=color)
 
-        # Get all accumulated masks
-        masks = tool_executor.get_current_masks()
-
-        # CONFIDENCE FILTERING - Remove low confidence detections
-        if masks:
-            before_count = len(masks)
-            masks = [m for m in masks if m.score >= self.config.confidence_threshold]
-            filtered = before_count - len(masks)
-            if filtered > 0:
-                print(f"  Filtered {filtered} low-confidence detections (threshold: {self.config.confidence_threshold})")
-            print(f"  Keeping {len(masks)} high-confidence detections")
-
-        # LLM VALIDATION - Filter out false positives (manholes as potholes, shadows, etc)
-        if masks and self.config.validate_with_llm:
-            print(f"\n{'='*60}")
-            print(f"Step 3: LLM validating {len(masks)} detections...")
-            print(f"{'='*60}")
-            # Reload Qwen to GPU for validation
-            if self.config.optimize_memory:
-                self._reload_qwen_to_gpu()
-            masks = self._validate_masks_with_llm(image, masks, tool_executor)
-            print(f"After validation: {len(masks)} masks kept")
-
-        # Build final detections
-        if masks:
-            print(f"\n{'='*60}")
-            print(f"Step 4: Rendering {len(masks)} masks on image...")
-            print(f"{'='*60}")
-
-            detections = [
-                {
-                    "mask_id": m.mask_id,
-                    "category": m.category,
-                    "severity": tool_executor._category_to_severity(m.category),
-                    "confidence": m.score,
-                    "bbox": m.bbox,
-                    "mask": m.mask,
-                }
-                for m in masks
-            ]
-            final_image = tool_executor._render_masks(masks)
-            print(f"✓ Detection complete!")
-
-            # Summary
-            categories_found = list(set(m.category for m in masks))
-            print(f"\n{'='*60}")
-            print(f"RESULTS: {len(masks)} objects detected")
-            print(f"Categories: {categories_found}")
-            print(f"{'='*60}")
-        else:
-            print("\n⚠ No objects found")
-            detections = []
-            final_image = image
+            final_detections.append({
+                "mask_id": i + 1, "category": label, "severity": "medium",
+                "confidence": confidence, "bbox": det['bbox'], "mask": None,
+            })
 
         elapsed = time.time() - start_time
-        logger.info(f"Detection complete: {len(detections)} issues in {elapsed:.2f}s")
+        print(f"\n{'='*60}")
+        print(f"RESULTS: {len(final_detections)} objects detected ({elapsed:.2f}s)")
+        print(f"{'='*60}")
 
         return AgentResult(
-            success=True,
-            detections=detections,
-            num_detections=len(detections),
-            final_image=final_image,
-            turns_taken=1,
-            message=f"Found {len(detections)} infrastructure issues"
+            success=True, detections=final_detections,
+            num_detections=len(final_detections), final_image=result_image,
+            turns_taken=1, message=f"Found {len(final_detections)} issues"
         )
+
+    def _ask_qwen_to_detect_with_boxes(self, image: Image.Image) -> List[Dict]:
+        """Ask Qwen to detect infrastructure issues with bounding boxes."""
+        img_width, img_height = image.size
+
+        prompt = f"""Analyze this street/road image. Detect ONLY these REAL PROBLEMS:
+
+1. pothole - Holes/depressions in road (NOT shadows, NOT wet spots)
+2. crack - Visible cracks in pavement
+3. manhole - Metal manhole covers
+4. graffiti - Spray paint/tags on walls
+5. trash - Garbage, litter on street
+6. tent/encampment - Homeless tents, tarps, shelters
+7. abandoned vehicle - ONLY vehicles with VISIBLE DAMAGE (flat tires, broken windows, rust, debris on top)
+   DO NOT detect normal parked cars as abandoned!
+
+Return JSON array with bounding boxes:
+[
+  {{"label": "pothole", "bbox_2d": [x1, y1, x2, y2]}},
+  {{"label": "crack", "bbox_2d": [x1, y1, x2, y2]}}
+]
+
+Image size: {img_width}x{img_height} pixels.
+If NO problems found, return: []"""
+
+        try:
+            result = self.qwen_detector.detect(image, prompt)
+            if not result.get("success"):
+                return []
+            return self._parse_json_detection_response(result.get("text", ""), img_width, img_height)
+        except Exception as e:
+            logger.error(f"Qwen error: {e}")
+            return []
+
+    def _parse_json_detection_response(self, response: str, img_width: int, img_height: int) -> List[Dict]:
+        """Parse JSON detection response from Qwen."""
+        import json
+        detections = []
+
+        try:
+            # Find JSON in response
+            json_str = None
+            if '```json' in response:
+                start = response.find('```json') + 7
+                end = response.find('```', start)
+                if end != -1:
+                    json_str = response[start:end].strip()
+
+            if not json_str:
+                start = response.find('[')
+                if start != -1:
+                    bracket_count = 0
+                    for i, c in enumerate(response[start:], start):
+                        if c == '[': bracket_count += 1
+                        elif c == ']':
+                            bracket_count -= 1
+                            if bracket_count == 0:
+                                json_str = response[start:i+1]
+                                break
+
+            if json_str:
+                parsed = json.loads(json_str)
+                if isinstance(parsed, list):
+                    for item in parsed:
+                        bbox = item.get('bbox_2d') or item.get('bbox')
+                        label = item.get('label', 'unknown')
+                        if bbox and len(bbox) == 4:
+                            x1, y1, x2, y2 = [int(float(b)) for b in bbox]
+                            x1, y1 = max(0, x1), max(0, y1)
+                            x2, y2 = min(img_width, x2), min(img_height, y2)
+                            if x1 < x2 and y1 < y2:
+                                detections.append({'label': label, 'bbox': [x1,y1,x2,y2], 'confidence': 0.8})
+        except:
+            pass
+
+        return detections
 
     def _run_text_prompt_search(
         self,
@@ -689,103 +738,6 @@ List everything you see. Be specific about any problems or issues."""
             logger.error(f"Qwen detection error: {e}")
             print(f"Qwen detection error: {e}")
             return []
-
-    def _parse_json_detection_response(self, response: str, img_width: int, img_height: int) -> List[Dict]:
-        """
-        Parse Qwen2.5-VL's native JSON grounding response.
-
-        Expected format:
-        [{"bbox_2d": [x1, y1, x2, y2], "label": "pothole", "confidence": 0.85}, ...]
-        """
-        import json
-        import re
-
-        detections = []
-        json_str = None
-
-        print(f"  Raw response length: {len(response)}")
-        print(f"  Raw response: {response[:500]}...")
-
-        try:
-            # Method 1: Try to find JSON in ```json code block
-            if '```json' in response:
-                start_marker = response.find('```json')
-                if start_marker != -1:
-                    start_marker += 7  # Skip past ```json
-                    end_marker = response.find('```', start_marker)
-                    if end_marker != -1:
-                        json_str = response[start_marker:end_marker].strip()
-                        print(f"  Found code block JSON: {json_str[:100]}...")
-
-            # Method 2: Use bracket counting to find complete [...] array
-            if not json_str:
-                start_idx = response.find('[')
-                if start_idx != -1:
-                    bracket_count = 0
-                    end_idx = start_idx
-                    for i, char in enumerate(response[start_idx:], start_idx):
-                        if char == '[':
-                            bracket_count += 1
-                        elif char == ']':
-                            bracket_count -= 1
-                            if bracket_count == 0:
-                                end_idx = i + 1
-                                break
-                    json_str = response[start_idx:end_idx]
-                    print(f"  Found bracket-counted JSON: {json_str[:100]}...")
-
-            # Method 3: Try the whole response as JSON
-            if not json_str:
-                json_str = response.strip()
-                print(f"  Trying whole response as JSON")
-
-            if json_str:
-                print(f"  Parsing JSON ({len(json_str)} chars): {json_str[:200]}...")
-                parsed = json.loads(json_str)
-                print(f"  Parsed successfully! Type: {type(parsed)}, Length: {len(parsed) if isinstance(parsed, list) else 'N/A'}")
-
-                if isinstance(parsed, list):
-                    for item in parsed:
-                        if isinstance(item, dict):
-                            # Handle bbox_2d format (Qwen2.5-VL native)
-                            bbox = item.get('bbox_2d') or item.get('bbox') or item.get('box')
-                            label = item.get('label', 'unknown')
-                            confidence = item.get('confidence', 0.8)
-
-                            if bbox and len(bbox) == 4:
-                                x1, y1, x2, y2 = [int(float(b)) for b in bbox]
-
-                                # Validate bbox
-                                if x1 >= x2 or y1 >= y2:
-                                    print(f"  Skipping invalid bbox: {bbox}")
-                                    continue
-
-                                # Clamp to image bounds
-                                x1 = max(0, min(x1, img_width))
-                                y1 = max(0, min(y1, img_height))
-                                x2 = max(0, min(x2, img_width))
-                                y2 = max(0, min(y2, img_height))
-
-                                if x1 < x2 and y1 < y2:
-                                    detections.append({
-                                        'label': label.lower().strip(),
-                                        'bbox': [x1, y1, x2, y2],
-                                        'confidence': float(confidence)
-                                    })
-                                    print(f"  ✓ Parsed: {label} at [{x1}, {y1}, {x2}, {y2}]")
-
-        except json.JSONDecodeError as e:
-            print(f"  JSON parse error: {e}")
-            print(f"  Attempted to parse: {json_str[:300] if json_str else 'None'}...")
-            logger.debug(f"JSON parse failed: {e}")
-        except Exception as e:
-            print(f"  Parse error: {e}")
-            import traceback
-            traceback.print_exc()
-            logger.debug(f"JSON detection parsing failed: {e}")
-
-        print(f"  Total detections parsed: {len(detections)}")
-        return detections
 
     def _parse_detection_response(self, response: str, img_width: int, img_height: int) -> List[Dict]:
         """
