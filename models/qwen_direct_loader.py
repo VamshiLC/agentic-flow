@@ -169,8 +169,11 @@ class Qwen3VLDirectDetector:
                 return_tensors="pt"
             )
 
-            # Move to device if not already
-            if not self.use_quantization:
+            # Move inputs to same device as model
+            if self.use_quantization:
+                # With quantization, model is on cuda via device_map="auto"
+                inputs = inputs.to("cuda")
+            else:
                 inputs = inputs.to(self.device)
 
             # Generate with gradient disabled for memory efficiency
@@ -300,8 +303,10 @@ class Qwen3VLDirectDetector:
                     return_tensors="pt"
                 )
 
-                # Move to device
-                if not self.use_quantization:
+                # Move inputs to same device as model
+                if self.use_quantization:
+                    inputs = inputs.to("cuda")
+                else:
                     inputs = inputs.to(self.device)
 
                 # Generate
