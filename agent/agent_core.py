@@ -101,116 +101,6 @@ class InfrastructureDetectionAgentCore:
 
         logger.info(f"Agent initialized with max_turns={self.config.max_turns}")
 
-    def _fuzzy_category_match(self, user_input: str, detected_label: str) -> bool:
-        """
-        Fuzzy matching to handle typos in user input.
-
-        Examples that should match:
-        - "abonded vechile" → "abandoned vehicle" (typos)
-        - "vehicle" → "abandoned vehicle" (partial)
-        - "car" → "abandoned vehicle" (synonym)
-
-        Args:
-            user_input: What user typed (may have typos)
-            detected_label: What Qwen detected
-
-        Returns:
-            True if they match semantically
-        """
-        # Normalize
-        user_input = user_input.lower().strip()
-        detected_label = detected_label.lower().strip()
-
-        # 1. Exact match
-        if user_input == detected_label:
-            return True
-
-        # 2. Substring match (either direction)
-        if user_input in detected_label or detected_label in user_input:
-            return True
-
-        # 3. Word overlap - any word from user matches any word in label
-        user_words = set(user_input.split())
-        label_words = set(detected_label.split())
-        if user_words & label_words:  # Intersection
-            return True
-
-        # 4. Fuzzy word matching (handles typos like "abonded" → "abandoned")
-        for user_word in user_words:
-            for label_word in label_words:
-                if self._levenshtein_similar(user_word, label_word, threshold=0.7):
-                    return True
-
-        # 5. Synonym matching for common terms
-        synonyms = {
-            'vehicle': ['car', 'automobile', 'truck', 'van', 'vehicle'],
-            'car': ['vehicle', 'automobile', 'car'],
-            'abandoned': ['abonded', 'abandond', 'abandonded', 'abandoned', 'derelict'],
-            'pothole': ['pothole', 'hole', 'pit'],
-            'crack': ['crack', 'cracks', 'fracture'],
-            'trash': ['trash', 'garbage', 'litter', 'debris'],
-            # Homeless-related synonyms - comprehensive matching
-            'tent': ['tent', 'encampment', 'camp', 'homeless', 'shelter', 'tarp'],
-            'homeless': ['homeless', 'homless', 'encampment', 'tent', 'person', 'sleeping', 'belongings'],
-            'encampment': ['encampment', 'camp', 'homeless', 'tent', 'belongings'],
-            'person': ['person', 'people', 'homeless', 'sleeping'],
-            'graffiti': ['graffiti', 'grafiti', 'spray', 'tag', 'vandalism'],
-            'manhole': ['manhole', 'drain', 'grate', 'cover'],
-        }
-
-        # Check if any user word is synonym of any label word
-        for user_word in user_words:
-            for base, syns in synonyms.items():
-                if user_word in syns or self._levenshtein_similar(user_word, base, 0.7):
-                    # User word matches this synonym group
-                    for label_word in label_words:
-                        if label_word in syns or label_word == base:
-                            return True
-
-        return False
-
-    def _levenshtein_similar(self, s1: str, s2: str, threshold: float = 0.7) -> bool:
-        """
-        Check if two strings are similar using Levenshtein distance.
-
-        Args:
-            s1, s2: Strings to compare
-            threshold: Minimum similarity ratio (0.0 to 1.0)
-
-        Returns:
-            True if similarity >= threshold
-        """
-        if not s1 or not s2:
-            return False
-
-        # Quick check for very similar lengths
-        len_diff = abs(len(s1) - len(s2))
-        max_len = max(len(s1), len(s2))
-        if len_diff > max_len * (1 - threshold):
-            return False
-
-        # Levenshtein distance
-        if len(s1) < len(s2):
-            s1, s2 = s2, s1
-
-        if len(s2) == 0:
-            return len(s1) == 0
-
-        previous_row = range(len(s2) + 1)
-        for i, c1 in enumerate(s1):
-            current_row = [i + 1]
-            for j, c2 in enumerate(s2):
-                insertions = previous_row[j + 1] + 1
-                deletions = current_row[j] + 1
-                substitutions = previous_row[j] + (c1 != c2)
-                current_row.append(min(insertions, deletions, substitutions))
-            previous_row = current_row
-
-        distance = previous_row[-1]
-        similarity = 1 - (distance / max_len)
-
-        return similarity >= threshold
-
     def _optimize_memory_before_sam3(self):
         """
         MEMORY OPTIMIZATION: Clear Qwen model from GPU before SAM3 segmentation.
@@ -286,72 +176,59 @@ class InfrastructureDetectionAgentCore:
 
     def _run_direct_category_search(self, image: Image.Image) -> AgentResult:
         """
-        SMART DETECTION using Qwen's intelligence:
-        1. Qwen analyzes image and finds objects WITH bounding boxes
-        2. SAM3 segments those specific regions (using point prompts, not text)
+        SIMPLE approach:
+        1. Qwen looks at image and says what infrastructure issues it sees (plain text)
+        2. SAM3 segments those things using text prompts
 
-        This works because:
-        - Qwen is intelligent and can identify ANY object
-        - SAM3 point prompts are reliable (unlike text prompts)
+        NO JSON, NO BOUNDING BOXES - just simple text.
         """
         start_time = time.time()
 
         # Initialize tool executor
         tool_executor = ToolExecutor(self.sam3_processor, image)
 
-        # If user specified categories, use Qwen to find those specific things
+        # If user specified categories, skip Qwen and search directly
         if self.config.categories:
-            print(f"\n{'='*60}")
-            print(f"SMART DETECTION: Looking for {self.config.categories}")
-            print(f"{'='*60}")
+            return self._run_text_prompt_search(image, self.config.categories, tool_executor, start_time)
 
         print(f"\n{'='*60}")
-        print(f"Step 1: Qwen analyzing image...")
+        print(f"SMART DETECTION MODE")
+        print(f"Step 1: Asking Qwen what it sees...")
         print(f"{'='*60}")
 
-        # Ask Qwen to find objects WITH bounding boxes
-        detections = self._ask_qwen_to_detect_with_boxes(image)
+        # Ask Qwen what infrastructure issues it sees (simple text response)
+        found_items = self._ask_qwen_what_it_sees(image)
 
-        # Filter by user categories if specified
-        if self.config.categories and detections:
-            user_cats = [c.lower().strip() for c in self.config.categories]
-            filtered = []
-            for det in detections:
-                label = det['label'].lower().strip()
-                # Check if detection matches any user category (with fuzzy matching for typos)
-                for cat in user_cats:
-                    if self._fuzzy_category_match(cat, label):
-                        filtered.append(det)
-                        break
-            print(f"Filtering to match: {self.config.categories}")
-            print(f"  Before: {len(detections)} detections")
-            print(f"  After: {len(filtered)} detections")
-            detections = filtered  # Always apply filter when categories specified
-
-        if not detections:
-            print("Qwen didn't find any objects with bounding boxes.")
-            print("Falling back to text prompt search...")
-            # Fallback to old text prompt method
+        if not found_items:
+            print("Qwen didn't identify any specific issues.")
+            print("Falling back to searching ALL categories...")
+            # Fallback: search ALL infrastructure categories
             from .system_prompt import get_categories
-            categories = self.config.categories or list(get_categories().keys())
-            return self._run_text_prompt_search(image, categories, tool_executor, start_time)
-
-        print(f"\nQwen found {len(detections)} objects:")
-        for det in detections:
-            print(f"  - {det['label']} at {det['bbox']}")
+            found_items = list(get_categories().keys())
 
         # MEMORY OPTIMIZATION: Clear Qwen from GPU before SAM3 segmentation
         if self.config.optimize_memory:
             self._optimize_memory_before_sam3()
 
         print(f"\n{'='*60}")
-        print(f"Step 2: SAM3 segmenting {len(detections)} objects...")
+        print(f"Step 2: SAM3 searching for: {found_items}")
         print(f"{'='*60}")
 
-        # Use SAM3 to segment each detected region using bounding boxes
-        masks = tool_executor.segment_from_boxes(detections)
+        # SAM3 segments using text prompts
+        all_masks = []
+        for item in found_items:
+            print(f"  Searching '{item}'...", end=" ", flush=True)
+            try:
+                result = tool_executor.execute("segment_phrase", {"text_prompt": item})
+                if result.success and result.data.get("num_masks", 0) > 0:
+                    num_found = result.data['num_masks']
+                    print(f"✓ {num_found} found")
+                else:
+                    print("✗ none")
+            except Exception as e:
+                print(f"✗ error: {e}")
 
-        # Get masks from box segmentation
+        # Get all accumulated masks
         masks = tool_executor.get_current_masks()
 
         # CONFIDENCE FILTERING - Remove low confidence detections
@@ -425,74 +302,38 @@ class InfrastructureDetectionAgentCore:
         start_time: float
     ) -> AgentResult:
         """
-        Search using SAM3 text prompts with multiple alternatives per category.
+        Fallback: Search using SAM3 text prompts (old approach).
 
-        SAM3 text prompts work better with simple, common object names.
-        We try multiple prompts for each category to increase detection.
+        Used when:
+        - User specifies specific categories
+        - Smart detection fails
         """
-        # Map categories to multiple SAM3-friendly prompts
-        # SAM3 responds better to common object names
-        category_prompts = {
-            # Vehicles - try multiple terms
-            'car': ['car', 'vehicle', 'automobile', 'sedan', 'truck', 'van'],
-            'vehicle': ['car', 'vehicle', 'automobile', 'sedan', 'truck'],
-            'abandoned vehicle': ['car', 'vehicle', 'automobile', 'truck'],
-            # Homeless/encampments
-            'tent': ['tent', 'tarp', 'shelter', 'blanket', 'sleeping bag', 'cardboard'],
-            'encampment': ['tent', 'tarp', 'shelter', 'blanket'],
-            # Road damage
-            'pothole': ['pothole', 'hole', 'pit', 'cavity'],
-            'crack': ['crack', 'fracture', 'split', 'line'],
-            # Infrastructure
-            'manhole': ['manhole', 'manhole cover', 'drain cover', 'metal cover', 'grate'],
-            'graffiti': ['graffiti', 'spray paint', 'paint', 'writing on wall'],
-            # Trash
-            'trash': ['trash', 'garbage', 'litter', 'debris', 'bag', 'bottle', 'can'],
-            'garbage': ['garbage', 'trash', 'litter', 'debris'],
-            'illegal dumping': ['furniture', 'mattress', 'couch', 'appliance', 'debris pile'],
-            # Signs/lights
-            'damaged sign': ['sign', 'street sign', 'road sign', 'stop sign'],
-            'damaged light': ['street light', 'lamp post', 'light pole'],
-            'damaged crosswalk': ['crosswalk', 'zebra crossing', 'road marking'],
-            'blocked sidewalk': ['obstruction', 'barrier', 'blockage'],
-        }
-
         print(f"\n{'='*60}")
         print(f"TEXT PROMPT SEARCH: {len(categories)} categories")
         print(f"{'='*60}")
         logger.info(f"=== SEARCHING {len(categories)} CATEGORIES ===")
 
-        # Search EVERY category with multiple alternative prompts
+        # Search EVERY category
         found_categories = []
         total_masks_found = 0
         for i, category in enumerate(categories):
-            # Get alternative prompts for this category
-            prompts_to_try = category_prompts.get(category.lower(), [category])
-
-            print(f"[{i+1}/{len(categories)}] Searching: {category}...")
+            print(f"[{i+1}/{len(categories)}] Searching: {category}...", end=" ", flush=True)
             logger.info(f"[{i+1}/{len(categories)}] Searching: {category}")
 
-            category_found = False
-            for prompt in prompts_to_try:
-                print(f"    Trying '{prompt}'...", end=" ", flush=True)
-                try:
-                    result = tool_executor.execute("segment_phrase", {"text_prompt": prompt})
-                    if result.success and result.data.get("num_masks", 0) > 0:
-                        num_found = result.data['num_masks']
-                        total_masks_found += num_found
-                        print(f"✓ {num_found} mask(s)")
-                        logger.info(f"  ✓ Found {num_found} mask(s) for '{prompt}'")
-                        category_found = True
-                        # Don't break - try all prompts to get more detections
-                    else:
-                        print("✗")
-                        logger.debug(f"  ✗ No masks for '{prompt}'")
-                except Exception as e:
-                    print(f"ERROR: {e}")
-                    logger.warning(f"  Error searching '{prompt}': {e}")
-
-            if category_found:
-                found_categories.append(category)
+            try:
+                result = tool_executor.execute("segment_phrase", {"text_prompt": category})
+                if result.success and result.data.get("num_masks", 0) > 0:
+                    num_found = result.data['num_masks']
+                    total_masks_found += num_found
+                    print(f"✓ {num_found} mask(s)")
+                    logger.info(f"  ✓ Found {num_found} mask(s) for '{category}'")
+                    found_categories.append(category)
+                else:
+                    print("✗ 0 masks")
+                    logger.debug(f"  ✗ No masks for '{category}'")
+            except Exception as e:
+                print(f"ERROR: {e}")
+                logger.warning(f"  Error searching '{category}': {e}")
 
         # Get all masks found
         masks = tool_executor.get_all_masks()
@@ -735,97 +576,6 @@ IMPORTANT: Be STRICT. Only Accept if the mask clearly shows the claimed object t
         """
         detections = self._ask_qwen_to_detect_with_boxes(image)
         return [d['label'] for d in detections]
-
-    def _ask_qwen_to_detect_with_boxes(self, image: Image.Image) -> List[Dict]:
-        """
-        GROUNDING DETECTION: Ask Qwen to find objects AND their bounding boxes.
-
-        This is the KEY method for accurate detection - Qwen provides:
-        1. What object it found (label)
-        2. WHERE it is (bounding box coordinates)
-
-        Then SAM3 can segment those specific regions instead of blind text search.
-
-        Returns:
-            List of dicts: [{"label": "car", "bbox": [x1,y1,x2,y2], "confidence": 0.9}, ...]
-        """
-        img_width, img_height = image.size
-
-        # Use Qwen2.5-VL's grounding detection capability
-        grounding_prompt = f"""Analyze this street/road image and detect ALL infrastructure problems and pavement damage.
-
-CATEGORIES TO DETECT (find ALL that apply):
-
-1. PAVEMENT CRACKS (detect ALL types!):
-   - longitudinal crack: Cracks running parallel to road direction (along the lane)
-   - transverse crack: Cracks running perpendicular/across the road
-   - alligator crack: Network of interconnected cracks forming a pattern like alligator skin (fatigue cracking)
-   - block crack: Rectangular crack patterns dividing pavement into blocks
-   - edge crack: Cracks along the edge of the road
-   - crack: Any other visible cracks, fractures, splits in pavement
-
-2. ROAD DAMAGE:
-   - pothole: Holes, depressions, broken pavement in road surface
-   - patching: Repaired areas with different pavement material
-   - raveling: Surface deterioration with loose aggregate
-
-3. HOMELESS/ENCAMPMENTS:
-   - homeless person: Any person sleeping, sitting, lying on sidewalk/street
-   - tent: Tents, tarps, makeshift shelters on sidewalk/street
-   - encampment: Homeless camps with belongings, blankets, cardboard, shopping carts
-
-4. INFRASTRUCTURE:
-   - manhole: Metal covers/grates on road
-   - graffiti: Spray paint, tags, vandalism on walls/surfaces
-   - trash: Garbage, litter, debris on street/sidewalk
-
-5. VEHICLES:
-   - abandoned vehicle: Vehicles with damage, flat tires, rust, broken windows
-
-6. OTHER:
-   - damaged sign: Broken, bent, or defaced signs
-   - blocked sidewalk: Obstructions blocking pedestrian path
-
-IMPORTANT: Detect ALL cracks - longitudinal, transverse, alligator, etc. Each crack should have its own bounding box.
-
-OUTPUT FORMAT - Return JSON array:
-[
-  {{"label": "longitudinal crack", "bbox_2d": [x1, y1, x2, y2]}},
-  {{"label": "alligator crack", "bbox_2d": [x1, y1, x2, y2]}},
-  {{"label": "pothole", "bbox_2d": [x1, y1, x2, y2]}}
-]
-
-Coordinates: x1,y1 = top-left, x2,y2 = bottom-right in PIXELS.
-Image size: {img_width}x{img_height} pixels.
-
-If NO problems found, return: []"""
-
-        try:
-            result = self.qwen_detector.detect(image, grounding_prompt)
-
-            if not result.get("success"):
-                logger.error("Qwen grounding detection failed")
-                return []
-
-            response = result.get("text", "")
-            print(f"Qwen grounding response: {response[:500]}...")
-
-            # Parse the JSON response
-            detections = self._parse_json_detection_response(response, img_width, img_height)
-
-            if detections:
-                print(f"Qwen found {len(detections)} objects with bboxes:")
-                for det in detections:
-                    print(f"  - {det['label']} at {det['bbox']}")
-            else:
-                print("Qwen found no objects (empty response)")
-
-            return detections
-
-        except Exception as e:
-            logger.error(f"Qwen grounding error: {e}")
-            print(f"Qwen grounding error: {e}")
-            return []
 
     def _ask_qwen_what_it_sees(self, image: Image.Image) -> List[str]:
         """
