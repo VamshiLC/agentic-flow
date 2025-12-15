@@ -354,40 +354,6 @@ class InfrastructureDetectionAgentCore:
         # Get masks from box segmentation
         masks = tool_executor.get_current_masks()
 
-        # Step 3: ALSO search ALL categories with SAM3 text prompts
-        # This catches things Qwen might have missed
-        print(f"\n{'='*60}")
-        print(f"Step 3: SAM3 searching ALL categories (text prompts)...")
-        print(f"{'='*60}")
-
-        from .system_prompt import get_categories
-        all_categories = list(get_categories().keys())
-
-        # Add crack types
-        all_categories.extend([
-            'longitudinal crack', 'transverse crack', 'alligator crack',
-            'block crack', 'edge crack', 'crack'
-        ])
-
-        # Remove duplicates
-        all_categories = list(set(all_categories))
-
-        for category in all_categories:
-            # Skip if already found by Qwen
-            already_found = any(
-                category.lower() in det['label'].lower() or det['label'].lower() in category.lower()
-                for det in detections
-            )
-            if already_found:
-                continue
-
-            result = tool_executor._segment_phrase({"text_prompt": category})
-            if result.success and result.data.get("num_masks", 0) > 0:
-                print(f"  ✓ SAM3 found {result.data['num_masks']} {category}(s)")
-
-        # Get ALL accumulated masks (from both methods)
-        masks = tool_executor.get_current_masks()
-
         # CONFIDENCE FILTERING - Remove low confidence detections
         if masks:
             before_count = len(masks)

@@ -240,13 +240,13 @@ class ToolExecutor:
 
     def segment_from_boxes(self, detections: List[Dict]) -> List:
         """
-        SMART SEGMENTATION: Use SAM3 to segment specific bounding boxes.
+        CLEAN SEGMENTATION: Use SAM3 to segment each Qwen bounding box.
 
-        Two-stage approach:
-        1. Try SAM3 text prompt with the label (e.g., "pothole")
-        2. Crop result to bounding box from Qwen detection
+        For each detection from Qwen:
+        1. Use SAM3 box/point prompt to segment that specific region
+        2. Create a mask for that detection only
 
-        This combines Qwen's semantic understanding with SAM3's segmentation.
+        This gives clean output like qwen.png - one mask per detection.
 
         Args:
             detections: List of dicts from Qwen3 with:
@@ -262,38 +262,33 @@ class ToolExecutor:
 
         print(f"  Segmenting {len(detections)} detected objects with SAM3...")
 
-        # Get unique labels from detections
-        unique_labels = list(set(det['label'] for det in detections))
-        print(f"  Unique categories to segment: {unique_labels}")
+        for i, det in enumerate(detections):
+            label = det['label']
+            bbox = det['bbox']
+            confidence = det.get('confidence', 0.5)
 
-        # Use SAM3 text prompts for each unique label (same as sam3.png!)
-        for label in unique_labels:
-            # Get SAM3-friendly label
-            label_variants = self._get_sam3_friendly_labels(label)
+            print(f"    [{i+1}/{len(detections)}] {label} at {bbox}...", end=" ")
 
-            for variant in label_variants:
-                # Skip if already used this prompt
-                if variant.lower() in self.used_prompts:
-                    continue
+            # Use SAM3 to segment this specific bounding box
+            mask = self._segment_box_with_sam3(bbox)
 
-                print(f"    SAM3 searching for '{variant}'...", end=" ")
+            if mask is not None:
+                mask_id = len(self.masks) + 1
+                mask_data = MaskData(
+                    mask_id=mask_id,
+                    mask=mask,
+                    score=confidence,
+                    bbox=bbox,
+                    category=label,
+                    text_prompt=label
+                )
+                self.masks.append(mask_data)
+                print(f"✓ mask created")
+            else:
+                print(f"✗ failed")
 
-                # Call _segment_phrase - this is what works in sam3.png!
-                result = self._segment_phrase({"text_prompt": variant})
-
-                if result.success and result.data.get("num_masks", 0) > 0:
-                    num_found = result.data.get("num_masks", 0)
-                    print(f"✓ found {num_found} mask(s)")
-                    # Update category to match Qwen's label
-                    for m in self.masks[-num_found:]:
-                        m.category = label
-                    break
-                else:
-                    print("✗ no masks")
-
-        new_masks = self.masks
-        print(f"  Total: {len(new_masks)} masks generated")
-        return new_masks
+        print(f"  Total: {len(self.masks)} masks generated")
+        return self.masks
 
     def _get_best_sam3_mask_for_bbox(self, label: str, bbox: List[int]) -> np.ndarray:
         """
