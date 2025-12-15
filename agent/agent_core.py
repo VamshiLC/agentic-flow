@@ -293,6 +293,102 @@ class InfrastructureDetectionAgentCore:
             message=f"Found {len(final_detections)} infrastructure issues"
         )
 
+    def _ask_qwen_to_detect_with_boxes(self, image: Image.Image) -> List[Dict]:
+        """
+        Ask Qwen to find objects AND their bounding boxes.
+        Returns: [{"label": "pothole", "bbox": [x1,y1,x2,y2], "confidence": 0.8}, ...]
+        """
+        img_width, img_height = image.size
+
+        grounding_prompt = f"""Analyze this street/road image and detect ALL infrastructure problems.
+
+DETECT these categories (with bounding boxes):
+- pothole: Holes in road
+- crack: Cracks in pavement
+- manhole: Metal covers on road
+- graffiti: Spray paint on walls
+- trash: Garbage, litter
+- tent: Tents, encampments, homeless shelters
+- abandoned vehicle: Damaged/abandoned cars
+
+OUTPUT FORMAT - Return JSON array:
+[
+  {{"label": "pothole", "bbox_2d": [x1, y1, x2, y2]}},
+  {{"label": "crack", "bbox_2d": [x1, y1, x2, y2]}}
+]
+
+Coordinates in PIXELS. Image size: {img_width}x{img_height}.
+If nothing found, return: []"""
+
+        try:
+            result = self.qwen_detector.detect(image, grounding_prompt)
+            if not result.get("success"):
+                return []
+
+            response = result.get("text", "")
+            return self._parse_json_detection_response(response, img_width, img_height)
+
+        except Exception as e:
+            logger.error(f"Qwen detection error: {e}")
+            return []
+
+    def _parse_json_detection_response(self, response: str, img_width: int, img_height: int) -> List[Dict]:
+        """Parse Qwen's JSON response to extract detections."""
+        import json
+
+        detections = []
+        json_str = None
+
+        try:
+            # Find JSON in ```json code block
+            if '```json' in response:
+                start = response.find('```json') + 7
+                end = response.find('```', start)
+                if end != -1:
+                    json_str = response[start:end].strip()
+
+            # Or find [...] array
+            if not json_str:
+                start_idx = response.find('[')
+                if start_idx != -1:
+                    bracket_count = 0
+                    for i, char in enumerate(response[start_idx:], start_idx):
+                        if char == '[':
+                            bracket_count += 1
+                        elif char == ']':
+                            bracket_count -= 1
+                            if bracket_count == 0:
+                                json_str = response[start_idx:i+1]
+                                break
+
+            if json_str:
+                parsed = json.loads(json_str)
+                if isinstance(parsed, list):
+                    for item in parsed:
+                        if isinstance(item, dict):
+                            bbox = item.get('bbox_2d') or item.get('bbox')
+                            label = item.get('label', 'unknown')
+
+                            if bbox and len(bbox) == 4:
+                                x1, y1, x2, y2 = [int(float(b)) for b in bbox]
+                                # Clamp to image bounds
+                                x1 = max(0, min(x1, img_width))
+                                y1 = max(0, min(y1, img_height))
+                                x2 = max(0, min(x2, img_width))
+                                y2 = max(0, min(y2, img_height))
+
+                                if x1 < x2 and y1 < y2:
+                                    detections.append({
+                                        'label': label,
+                                        'bbox': [x1, y1, x2, y2],
+                                        'confidence': item.get('confidence', 0.8)
+                                    })
+
+        except Exception as e:
+            logger.debug(f"JSON parse failed: {e}")
+
+        return detections
+
     def _run_text_prompt_search(
         self,
         image: Image.Image,
