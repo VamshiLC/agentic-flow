@@ -411,12 +411,24 @@ class InfrastructureDetectionAgentCore:
             except:
                 draw.text((x1, y1 - 15), label, fill=color)
 
-        # Save summary JSON
+        # Save summary JSON (exclude numpy arrays which can't be serialized)
+        json_safe_detections = []
+        for det in final_detections:
+            safe_det = {
+                "mask_id": det["mask_id"],
+                "category": det["category"],
+                "severity": det["severity"],
+                "confidence": float(det["confidence"]) if det["confidence"] else 0.8,
+                "bbox": det["bbox"],
+                "has_mask": det.get("mask") is not None,
+            }
+            json_safe_detections.append(safe_det)
+
         summary = {
             "total_detections": len(final_detections),
             "categories_found": list(by_category.keys()),
             "by_category": {cat: len(dets) for cat, dets in by_category.items()},
-            "detections": final_detections,
+            "detections": json_safe_detections,
         }
         summary_path = os.path.join(output_base, "summary.json")
         with open(summary_path, 'w') as f:
