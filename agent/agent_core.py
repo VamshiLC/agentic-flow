@@ -576,37 +576,45 @@ Describe everything visible."""
             response = result.get("text", "").lower()
             print(f"Qwen says: {response}")
 
-            # Extract what Qwen found - expanded keywords
+            # Extract what Qwen found - map to SAM3-friendly search terms
             found_items = []
+            # Format: 'keyword in qwen response' -> 'SAM3 search term'
             keywords = {
-                'graffiti': 'graffiti',
-                'spray paint': 'graffiti',
-                'spray-paint': 'graffiti',
-                'painted': 'graffiti',
-                'writing on wall': 'graffiti',
-                'text on wall': 'graffiti',
-                'vandal': 'graffiti',
-                'tag': 'graffiti',
-                'mural': 'graffiti',
-                'street art': 'graffiti',
-                'pothole': 'pothole',
-                'hole in road': 'pothole',
-                'road damage': 'pothole',
-                'crack': 'crack',
-                'fracture': 'crack',
-                'manhole': 'manhole',
-                'metal cover': 'manhole',
-                'utility cover': 'manhole',
-                'sewer': 'manhole',
-                'drain': 'manhole',
-                'debris': 'debris',
-                'trash': 'debris',
-                'garbage': 'debris',
-                'litter': 'debris',
-                'damaged sign': 'damaged sign',
-                'broken sign': 'damaged sign',
-                'damaged light': 'damaged light',
-                'broken light': 'damaged light',
+                # Graffiti - use descriptive terms SAM3 understands
+                'graffiti': 'spray paint on wall',
+                'spray paint': 'spray paint on wall',
+                'spray-paint': 'spray paint on wall',
+                'painted wall': 'painted wall',
+                'writing on wall': 'text on wall',
+                'text on wall': 'text on wall',
+                'vandal': 'spray paint on wall',
+                'mural': 'painted wall',
+                'street art': 'painted wall',
+                # Road damage
+                'pothole': 'hole in road',
+                'hole in road': 'hole in road',
+                'road damage': 'damaged road',
+                'crack': 'crack in road',
+                'fracture': 'crack in road',
+                # Manholes - use what SAM3 can see
+                'manhole': 'round metal cover on road',
+                'metal cover': 'round metal cover on road',
+                'metal grate': 'metal grate',
+                'utility cover': 'round metal cover on road',
+                'sewer': 'round metal cover on road',
+                'drain': 'drain grate',
+                'grate': 'metal grate',
+                # Debris
+                'debris': 'trash on road',
+                'trash': 'trash on road',
+                'garbage': 'garbage on road',
+                'litter': 'litter on road',
+                # Signs and lights
+                'sign': 'street sign',
+                'traffic sign': 'traffic sign',
+                'street sign': 'street sign',
+                'traffic light': 'traffic light',
+                'street light': 'street light',
             }
 
             for keyword, label in keywords.items():
