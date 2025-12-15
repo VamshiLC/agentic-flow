@@ -532,18 +532,8 @@ class InfrastructureDetectionAgentHF:
                     state=inference_state
                 )
 
-                # FIX: Actually run inference to get masks
-                # After adding geometric prompt, we need to call predict() to generate masks
-                output = self.sam3_processor.predict(inference_state)
-
-                # Extract masks from prediction output
-                if isinstance(output, dict) and 'masks' in output:
-                    masks = output['masks']
-                elif hasattr(output, 'masks'):
-                    masks = output.masks
-                else:
-                    logger.warning(f"Unexpected SAM3 geometric output format: {type(output)}")
-                    masks = []
+                # Retrieve results from state
+                masks = inference_state.get('masks', [])
 
             # FALLBACK: Use text prompt
             elif query is not None:
