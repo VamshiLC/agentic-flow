@@ -262,7 +262,7 @@ class ToolExecutor:
 
         print(f"  Segmenting {len(detections)} detected objects with SAM3...")
 
-        initial_mask_count = len(self.masks)
+        new_masks = []
 
         for i, det in enumerate(detections):
             label = det['label']
@@ -272,35 +272,114 @@ class ToolExecutor:
             print(f"    [{i+1}/{len(detections)}] {label} at {bbox}...", end=" ")
 
             try:
-                # Use SAM3 TEXT PROMPT directly - same as segment_phrase (BEST quality!)
-                # This is what gives nice segmentation like sam3.png
+                # Get SAM3-friendly labels for this detection
                 label_variants = self._get_sam3_friendly_labels(label)
 
                 found_mask = False
                 for variant in label_variants:
-                    # Call segment_phrase internally - this works great
-                    result = self._segment_phrase({"text_prompt": variant})
+                    # Get SAM3 mask that MATCHES Qwen's bbox (not all masks!)
+                    mask_np = self._get_best_sam3_mask_for_bbox(variant, bbox)
 
-                    if result.success and result.data.get("num_masks", 0) > 0:
-                        print(f"(text:'{variant}') ✓")
+                    if mask_np is not None and mask_np.any():
+                        mask_data = MaskData(
+                            mask_id=len(self.masks) + 1,
+                            mask=mask_np,
+                            bbox=bbox,
+                            category=label,
+                            score=confidence,
+                            text_prompt=variant,
+                        )
+                        self.masks.append(mask_data)
+                        new_masks.append(mask_data)
+                        print(f"('{variant}') ✓")
                         found_mask = True
-                        # Masks are already added to self.masks by _segment_phrase
-                        # Update the category to match Qwen's label
-                        num_new = result.data.get("num_masks", 0)
-                        for m in self.masks[-num_new:]:
-                            m.category = label
                         break
 
                 if not found_mask:
-                    print("✗ (no mask from SAM3)")
+                    print("✗ (no matching mask)")
 
             except Exception as e:
                 print(f"✗ ({e})")
                 logger.error(f"Box segmentation failed for {label}: {e}")
 
-        new_masks = self.masks[initial_mask_count:]
         print(f"  Total: {len(new_masks)} masks generated")
         return new_masks
+
+    def _get_best_sam3_mask_for_bbox(self, label: str, bbox: List[int]) -> np.ndarray:
+        """
+        Get the ONE SAM3 mask that best matches Qwen's bounding box.
+
+        This prevents SAM3 from returning too many masks and making image messy.
+        Only returns mask that has good overlap with Qwen's detected bbox.
+        """
+        try:
+            x1, y1, x2, y2 = bbox
+            h, w = self.original_image.size[1], self.original_image.size[0]
+
+            # Call SAM3 text prompt
+            output = self.sam3_processor.set_text_prompt(
+                state=self.inference_state,
+                prompt=label
+            )
+
+            if not output:
+                return None
+
+            # Extract masks
+            raw_masks = []
+            scores = []
+
+            if isinstance(output, dict):
+                raw_masks = output.get('masks', [])
+                scores = output.get('scores', [])
+            elif hasattr(output, 'masks'):
+                raw_masks = output.masks
+                scores = getattr(output, 'scores', [])
+
+            if not raw_masks:
+                return None
+
+            # Find mask with BEST IoU with Qwen's bbox
+            best_mask = None
+            best_iou = 0.15  # Minimum 15% IoU required
+
+            for i, mask in enumerate(raw_masks):
+                # Convert to numpy
+                if hasattr(mask, 'cpu'):
+                    mask_np = mask.cpu().numpy()
+                else:
+                    mask_np = np.array(mask)
+
+                if mask_np.ndim > 2:
+                    mask_np = mask_np.squeeze()
+
+                if mask_np.shape[0] != h or mask_np.shape[1] != w:
+                    continue
+
+                mask_binary = (mask_np > 0.5)
+
+                # Create bbox mask
+                bbox_mask = np.zeros((h, w), dtype=bool)
+                bbox_mask[y1:y2, x1:x2] = True
+
+                # Calculate IoU
+                intersection = np.sum(mask_binary & bbox_mask)
+                union = np.sum(mask_binary | bbox_mask)
+
+                if union > 0:
+                    iou = intersection / union
+                    if iou > best_iou:
+                        best_iou = iou
+                        best_mask = mask_np
+
+            if best_mask is not None:
+                return (best_mask > 0.5).astype(np.uint8) * 255
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"SAM3 mask for bbox failed: {e}")
+            return None
 
     def _segment_with_text_prompt_full(self, label: str, bbox: List[int]) -> np.ndarray:
         """
@@ -414,9 +493,18 @@ class ToolExecutor:
 
         # Mapping from detection labels to SAM3-friendly terms
         label_map = {
+            # ALL CRACK TYPES - map to "crack" for SAM3
+            'longitudinal crack': ['crack', 'road crack', 'pavement crack'],
+            'transverse crack': ['crack', 'road crack', 'pavement crack'],
+            'alligator crack': ['crack', 'road crack', 'pavement crack'],
+            'block crack': ['crack', 'road crack', 'pavement crack'],
+            'edge crack': ['crack', 'road crack', 'pavement crack'],
+            'crack': ['crack', 'road crack', 'pavement crack'],
+
             # Road damage
             'pothole': ['pothole', 'hole in road', 'road damage'],
-            'crack': ['crack', 'road crack', 'pavement crack'],
+            'patching': ['patch', 'road patch', 'pavement'],
+            'raveling': ['road damage', 'pavement', 'road surface'],
 
             # Homeless/encampments
             'homeless person': ['person', 'human', 'people'],

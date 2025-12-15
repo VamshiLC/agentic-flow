@@ -752,44 +752,47 @@ IMPORTANT: Be STRICT. Only Accept if the mask clearly shows the claimed object t
         img_width, img_height = image.size
 
         # Use Qwen2.5-VL's grounding detection capability
-        grounding_prompt = f"""Analyze this street/road image and detect ALL infrastructure problems and issues.
+        grounding_prompt = f"""Analyze this street/road image and detect ALL infrastructure problems and pavement damage.
 
 CATEGORIES TO DETECT (find ALL that apply):
 
-1. ROAD DAMAGE:
-   - pothole: Holes, depressions, broken pavement in road surface
-   - crack: Visible cracks, fractures, splits in pavement
+1. PAVEMENT CRACKS (detect ALL types!):
+   - longitudinal crack: Cracks running parallel to road direction (along the lane)
+   - transverse crack: Cracks running perpendicular/across the road
+   - alligator crack: Network of interconnected cracks forming a pattern like alligator skin (fatigue cracking)
+   - block crack: Rectangular crack patterns dividing pavement into blocks
+   - edge crack: Cracks along the edge of the road
+   - crack: Any other visible cracks, fractures, splits in pavement
 
-2. HOMELESS/ENCAMPMENTS (IMPORTANT - detect these!):
+2. ROAD DAMAGE:
+   - pothole: Holes, depressions, broken pavement in road surface
+   - patching: Repaired areas with different pavement material
+   - raveling: Surface deterioration with loose aggregate
+
+3. HOMELESS/ENCAMPMENTS:
    - homeless person: Any person sleeping, sitting, lying on sidewalk/street
    - tent: Tents, tarps, makeshift shelters on sidewalk/street
    - encampment: Homeless camps with belongings, blankets, cardboard, shopping carts
-   - sleeping bag: Sleeping bags, bedding on sidewalk
-   - belongings: Piles of personal belongings, bags, carts on sidewalk
 
-3. INFRASTRUCTURE:
+4. INFRASTRUCTURE:
    - manhole: Metal covers/grates on road
    - graffiti: Spray paint, tags, vandalism on walls/surfaces
    - trash: Garbage, litter, debris on street/sidewalk
-   - illegal dumping: Large items dumped (furniture, mattresses, appliances)
 
-4. VEHICLES:
-   - abandoned vehicle: Vehicles with damage, flat tires, rust, broken windows, covered in debris
+5. VEHICLES:
+   - abandoned vehicle: Vehicles with damage, flat tires, rust, broken windows
 
-5. OTHER:
+6. OTHER:
    - damaged sign: Broken, bent, or defaced signs
    - blocked sidewalk: Obstructions blocking pedestrian path
 
-DETECTION RULES:
-- For homeless: Look for people on ground, tents, tarps, blankets, shopping carts, piles of belongings
-- For abandoned vehicles: Must show damage signs (NOT normal parked cars)
-- Detect EVERYTHING you see that matches these categories
+IMPORTANT: Detect ALL cracks - longitudinal, transverse, alligator, etc. Each crack should have its own bounding box.
 
 OUTPUT FORMAT - Return JSON array:
 [
-  {{"label": "pothole", "bbox_2d": [x1, y1, x2, y2]}},
-  {{"label": "tent", "bbox_2d": [x1, y1, x2, y2]}},
-  {{"label": "homeless person", "bbox_2d": [x1, y1, x2, y2]}}
+  {{"label": "longitudinal crack", "bbox_2d": [x1, y1, x2, y2]}},
+  {{"label": "alligator crack", "bbox_2d": [x1, y1, x2, y2]}},
+  {{"label": "pothole", "bbox_2d": [x1, y1, x2, y2]}}
 ]
 
 Coordinates: x1,y1 = top-left, x2,y2 = bottom-right in PIXELS.
