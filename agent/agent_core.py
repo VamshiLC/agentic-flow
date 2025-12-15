@@ -516,7 +516,6 @@ class InfrastructureDetectionAgentCore:
                 ("alligator_cracks", "web-like pattern of interconnected cracks resembling alligator skin on road surface"),
                 ("longitudinal_cracks", "long cracks running parallel to the road direction"),
                 ("transverse_cracks", "cracks running perpendicular/across the road"),
-                ("road_surface_damage", "any visible damage, deterioration, or broken areas on the road surface"),
             ],
             "social_issues": [
                 ("homeless_encampment", "tents, tarps, blue tarps, makeshift shelters, camping tents, fabric shelters, cardboard shelters on sidewalk or street - ANY tent or tarp structure"),
@@ -549,22 +548,36 @@ class InfrastructureDetectionAgentCore:
         return all_detections
 
     def _detect_single_category(self, image: Image.Image, category: str, description: str, img_width: int, img_height: int) -> List[Dict]:
-        """Detect a single category - focused search with smart prompt."""
+        """Detect a single category - STRICT detection to avoid false positives."""
 
-        # Better prompt that forces detection
-        prompt = f"""Look carefully at this image. Find ALL instances of: {category}
+        # STRICT prompt - must be CERTAIN before detecting
+        prompt = f"""Analyze this image for: {category}
 
-What to look for: {description}
+Definition: {description}
 
-IMPORTANT: Look at EVERY part of the image carefully. If you see ANYTHING that matches "{category}", mark it with a bounding box.
+CRITICAL RULES - READ CAREFULLY:
+1. Only detect REAL, CLEAR instances of {category}
+2. DO NOT detect shadows - shadows are NOT {category}
+3. DO NOT detect normal road texture or color variations
+4. DO NOT detect wet spots or reflections
+5. DO NOT guess or assume - if you're not 100% CERTAIN, output []
 
-Output format - JSON array with bounding boxes in pixels:
+For POTHOLES specifically:
+- Must be an actual HOLE or DEPRESSION in the road
+- Must have visible DEPTH (you can see into it)
+- Shadows, dark patches, and stains are NOT potholes
+- Clean roads with no damage should return []
+
+For CRACKS specifically:
+- Must be actual BREAKS in the pavement surface
+- Lines, paint, or normal road joints are NOT cracks
+
+If you find a REAL {category} with HIGH CONFIDENCE, output JSON:
 [{{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}]
 
 Image size: {img_width} x {img_height} pixels.
-x1,y1 = top-left corner. x2,y2 = bottom-right corner.
 
-If you find {category}, output the JSON. If truly nothing found, output: []"""
+If NO {category} exists or you are NOT CERTAIN, output: []"""
 
         try:
             result = self.qwen_detector.detect(image, prompt)
