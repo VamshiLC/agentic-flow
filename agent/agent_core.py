@@ -231,6 +231,15 @@ class InfrastructureDetectionAgentCore:
         # Get all accumulated masks
         masks = tool_executor.get_current_masks()
 
+        # CONFIDENCE FILTERING - Remove low confidence detections
+        if masks:
+            before_count = len(masks)
+            masks = [m for m in masks if m.score >= self.config.confidence_threshold]
+            filtered = before_count - len(masks)
+            if filtered > 0:
+                print(f"  Filtered {filtered} low-confidence detections (threshold: {self.config.confidence_threshold})")
+            print(f"  Keeping {len(masks)} high-confidence detections")
+
         # LLM VALIDATION - Filter out false positives (manholes as potholes, shadows, etc)
         if masks and self.config.validate_with_llm:
             print(f"\n{'='*60}")
@@ -640,21 +649,18 @@ List everything you see. Be specific about any problems or issues."""
                 'abandoned vehicle': 'abandoned vehicle',
                 'derelict': 'abandoned vehicle',
                 'broken down car': 'abandoned vehicle',
-                # Signs
-                'sign': 'sign',
-                'traffic sign': 'traffic sign',
-                'street sign': 'street sign',
+                # Signs - only damaged ones are issues (normal signs are not problems)
                 'damaged sign': 'damaged sign',
                 'broken sign': 'damaged sign',
                 'bent sign': 'damaged sign',
-                # Lights
-                'traffic light': 'traffic light',
-                'street light': 'street light',
+                'defaced sign': 'damaged sign',
+                # Lights - only damaged ones are issues
                 'broken light': 'damaged light',
                 'damaged light': 'damaged light',
-                # Crosswalk
-                'crosswalk': 'crosswalk',
-                'pedestrian crossing': 'crosswalk',
+                'non-functioning light': 'damaged light',
+                # Crosswalk - only damaged
+                'faded crosswalk': 'damaged crosswalk',
+                'damaged crosswalk': 'damaged crosswalk',
                 # Sidewalk issues
                 'blocked sidewalk': 'blocked sidewalk',
                 'obstruction': 'blocked sidewalk',

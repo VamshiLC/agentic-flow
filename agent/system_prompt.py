@@ -7,7 +7,7 @@ https://github.com/facebookresearch/sam3/blob/main/sam3/agent/system_prompts/sys
 Customized for road infrastructure detection with 12 categories.
 """
 
-# Infrastructure categories with descriptions
+# Infrastructure categories - ONLY problems/issues that need attention
 INFRASTRUCTURE_CATEGORIES = {
     # Critical (Red - High Priority)
     "pothole": "Holes or depressions in the road pavement surface",
@@ -23,14 +23,11 @@ INFRASTRUCTURE_CATEGORIES = {
     "trash": "Debris, litter, garbage on roadway or sidewalk",
     "blocked sidewalk": "Obstructions blocking pedestrian path",
 
-    # Infrastructure
-    "manhole": "Manhole covers and utility access points on the road",
-    "sign": "Traffic signs, street name signs, regulatory signs",
+    # Infrastructure ISSUES (damaged only - normal infrastructure is not a problem)
+    "manhole": "Manhole covers on the road",
     "damaged sign": "Broken, bent, or defaced signs",
-    "traffic light": "Traffic signal lights and poles",
-    "street light": "Street lights",
-    "damaged light": "Broken or non-functioning lights",
-    "crosswalk": "Pedestrian crosswalk markings",
+    "damaged light": "Broken or non-functioning street lights",
+    "damaged crosswalk": "Faded or damaged pedestrian crosswalk markings",
 }
 
 # Tool definitions in OpenAI function calling format
