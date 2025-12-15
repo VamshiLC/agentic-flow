@@ -641,7 +641,7 @@ IMPORTANT: Be STRICT. Only Accept if the mask clearly shows the claimed object t
         img_width, img_height = image.size
 
         # Use Qwen2.5-VL's grounding detection capability
-        grounding_prompt = """Analyze this image and detect ALL infrastructure issues and objects of concern.
+        grounding_prompt = f"""Analyze this image and detect ALL infrastructure issues and objects of concern.
 
 For EACH issue or object you find, provide the bounding box coordinates.
 
@@ -656,21 +656,19 @@ IMPORTANT CATEGORIES TO DETECT:
 - damaged signs (broken, bent, or defaced road signs)
 - blocked sidewalks (obstructions on walkways)
 
-OUTPUT FORMAT - Return a JSON array:
-```json
+OUTPUT FORMAT - Return a JSON array like this:
 [
-  {"label": "pothole", "bbox_2d": [x1, y1, x2, y2]},
-  {"label": "car", "bbox_2d": [x1, y1, x2, y2]},
-  {"label": "tent", "bbox_2d": [x1, y1, x2, y2]}
+  {{"label": "pothole", "bbox_2d": [x1, y1, x2, y2]}},
+  {{"label": "car", "bbox_2d": [x1, y1, x2, y2]}},
+  {{"label": "tent", "bbox_2d": [x1, y1, x2, y2]}}
 ]
-```
 
 Where x1,y1 is top-left corner and x2,y2 is bottom-right corner in PIXELS.
-Image size is {width}x{height} pixels.
+Image size is {img_width}x{img_height} pixels.
 
 If NO issues found, return: []
 
-Detect EVERYTHING visible. Be thorough.""".format(width=img_width, height=img_height)
+Detect EVERYTHING visible. Be thorough."""
 
         try:
             result = self.qwen_detector.detect(image, grounding_prompt)
