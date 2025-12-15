@@ -42,7 +42,8 @@ def draw_detections_with_masks(image_array, detections):
     text_padding = max(5, int(8 * scale))
 
     # Create overlay for semi-transparent masks
-    mask_overlay = np.zeros_like(annotated)
+    # COMMENTED OUT: Mask rendering disabled due to poor segmentation quality
+    # mask_overlay = np.zeros_like(annotated)
 
     for idx, det in enumerate(detections):
         label = det.get('label', 'unknown')
@@ -57,39 +58,42 @@ def draw_detections_with_masks(image_array, detections):
             # Get color (already in BGR format from DEFECT_COLORS)
             color_bgr = det.get('color', (0, 255, 0))
 
-            # Draw segmentation mask if available
-            if has_mask and mask is not None:
-                try:
-                    # Convert mask to numpy array if needed
-                    if isinstance(mask, list):
-                        mask_array = np.array(mask, dtype=np.uint8)
-                    else:
-                        mask_array = np.array(mask, dtype=np.uint8)
+            # COMMENTED OUT: Mask rendering disabled due to poor segmentation quality
+            # # Draw segmentation mask if available
+            # if has_mask and mask is not None:
+            #     try:
+            #         # Convert mask to numpy array if needed
+            #         if isinstance(mask, list):
+            #             mask_array = np.array(mask, dtype=np.uint8)
+            #         else:
+            #             mask_array = np.array(mask, dtype=np.uint8)
+            #
+            #         # Ensure mask is 2D
+            #         if mask_array.ndim > 2:
+            #             mask_array = mask_array.squeeze()
+            #
+            #         # Resize mask to image size if needed
+            #         if mask_array.shape != (height, width):
+            #             mask_array = cv2.resize(mask_array, (width, height),
+            #                                   interpolation=cv2.INTER_NEAREST)
+            #
+            #         # Create colored mask overlay (semi-transparent)
+            #         mask_overlay[mask_array > 0] = color_bgr
+            #
+            #         # Draw mask contour for better visibility
+            #         contours, _ = cv2.findContours(mask_array, cv2.RETR_EXTERNAL,
+            #                                        cv2.CHAIN_APPROX_SIMPLE)
+            #         cv2.drawContours(annotated, contours, -1, color_bgr, contour_thickness)
+            #
+            #         print(f"  [{idx+1}] {label}: {confidence:.1%} | bbox={bbox} | ✓ SEGMENTED")
+            #
+            #     except Exception as e:
+            #         print(f"  [{idx+1}] {label}: {confidence:.1%} | bbox={bbox} | ✗ MASK ERROR: {e}")
+            #         has_mask = False
+            # else:
+            #     print(f"  [{idx+1}] {label}: {confidence:.1%} | bbox={bbox}")
 
-                    # Ensure mask is 2D
-                    if mask_array.ndim > 2:
-                        mask_array = mask_array.squeeze()
-
-                    # Resize mask to image size if needed
-                    if mask_array.shape != (height, width):
-                        mask_array = cv2.resize(mask_array, (width, height),
-                                              interpolation=cv2.INTER_NEAREST)
-
-                    # Create colored mask overlay (semi-transparent)
-                    mask_overlay[mask_array > 0] = color_bgr
-
-                    # Draw mask contour for better visibility
-                    contours, _ = cv2.findContours(mask_array, cv2.RETR_EXTERNAL,
-                                                   cv2.CHAIN_APPROX_SIMPLE)
-                    cv2.drawContours(annotated, contours, -1, color_bgr, contour_thickness)
-
-                    print(f"  [{idx+1}] {label}: {confidence:.1%} | bbox={bbox} | ✓ SEGMENTED")
-
-                except Exception as e:
-                    print(f"  [{idx+1}] {label}: {confidence:.1%} | bbox={bbox} | ✗ MASK ERROR: {e}")
-                    has_mask = False
-            else:
-                print(f"  [{idx+1}] {label}: {confidence:.1%} | bbox={bbox}")
+            print(f"  [{idx+1}] {label}: {confidence:.1%} | bbox={bbox}")
 
             # Draw bounding box with adaptive thickness
             cv2.rectangle(annotated, (x1, y1), (x2, y2), color_bgr, bbox_thickness)
@@ -137,9 +141,10 @@ def draw_detections_with_masks(image_array, detections):
                        (255, 255, 255),
                        font_thickness)
 
-    # Blend mask overlay with annotated image (40% mask opacity)
-    if np.any(mask_overlay):
-        annotated = cv2.addWeighted(annotated, 1.0, mask_overlay, 0.4, 0)
+    # COMMENTED OUT: Mask rendering disabled due to poor segmentation quality
+    # # Blend mask overlay with annotated image (40% mask opacity)
+    # if np.any(mask_overlay):
+    #     annotated = cv2.addWeighted(annotated, 1.0, mask_overlay, 0.4, 0)
 
     return annotated
 

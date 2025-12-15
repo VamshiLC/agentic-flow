@@ -273,41 +273,43 @@ def draw_category_detections(frame_rgb, detections, category):
     text_padding = max(5, int(8 * scale))
 
     # Create overlay for semi-transparent masks
-    mask_overlay = np.zeros_like(frame)
+    # COMMENTED OUT: Mask rendering disabled due to poor segmentation quality
+    # mask_overlay = np.zeros_like(frame)
 
     for det in detections:
         bbox = det.get('bbox', [])
         has_mask = det.get('has_mask', False)
         mask = det.get('mask', None)
 
-        # Draw segmentation mask if available
-        if has_mask and mask is not None:
-            try:
-                # Convert mask to numpy array if needed
-                if isinstance(mask, list):
-                    mask_array = np.array(mask, dtype=np.uint8)
-                else:
-                    mask_array = np.array(mask, dtype=np.uint8)
-
-                # Ensure mask is 2D
-                if mask_array.ndim > 2:
-                    mask_array = mask_array.squeeze()
-
-                # Resize mask to frame size if needed
-                if mask_array.shape != (height, width):
-                    mask_array = cv2.resize(mask_array, (width, height),
-                                          interpolation=cv2.INTER_NEAREST)
-
-                # Create colored mask overlay
-                mask_overlay[mask_array > 0] = color_bgr
-
-                # Draw mask contour for better visibility
-                contours, _ = cv2.findContours(mask_array, cv2.RETR_EXTERNAL,
-                                               cv2.CHAIN_APPROX_SIMPLE)
-                cv2.drawContours(frame, contours, -1, color_bgr, contour_thickness)
-
-            except Exception as e:
-                logger.warning(f"Failed to render mask for {category}: {e}")
+        # COMMENTED OUT: Mask rendering disabled due to poor segmentation quality
+        # # Draw segmentation mask if available
+        # if has_mask and mask is not None:
+        #     try:
+        #         # Convert mask to numpy array if needed
+        #         if isinstance(mask, list):
+        #             mask_array = np.array(mask, dtype=np.uint8)
+        #         else:
+        #             mask_array = np.array(mask, dtype=np.uint8)
+        #
+        #         # Ensure mask is 2D
+        #         if mask_array.ndim > 2:
+        #             mask_array = mask_array.squeeze()
+        #
+        #         # Resize mask to frame size if needed
+        #         if mask_array.shape != (height, width):
+        #             mask_array = cv2.resize(mask_array, (width, height),
+        #                                   interpolation=cv2.INTER_NEAREST)
+        #
+        #         # Create colored mask overlay
+        #         mask_overlay[mask_array > 0] = color_bgr
+        #
+        #         # Draw mask contour for better visibility
+        #         contours, _ = cv2.findContours(mask_array, cv2.RETR_EXTERNAL,
+        #                                        cv2.CHAIN_APPROX_SIMPLE)
+        #         cv2.drawContours(frame, contours, -1, color_bgr, contour_thickness)
+        #
+        #     except Exception as e:
+        #         logger.warning(f"Failed to render mask for {category}: {e}")
 
         if len(bbox) == 4:
             x1, y1, x2, y2 = map(int, bbox)
@@ -352,9 +354,10 @@ def draw_category_detections(frame_rgb, detections, category):
                        cv2.FONT_HERSHEY_SIMPLEX, font_scale,
                        (255, 255, 255), font_thickness)
 
-    # Blend mask overlay with frame (40% mask opacity)
-    if np.any(mask_overlay):
-        frame = cv2.addWeighted(frame, 1.0, mask_overlay, 0.4, 0)
+    # COMMENTED OUT: Mask rendering disabled due to poor segmentation quality
+    # # Blend mask overlay with frame (40% mask opacity)
+    # if np.any(mask_overlay):
+    #     frame = cv2.addWeighted(frame, 1.0, mask_overlay, 0.4, 0)
 
     return frame
 
