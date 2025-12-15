@@ -15,8 +15,8 @@ INFRASTRUCTURE_CATEGORIES = {
     "graffiti": "Spray paint, tags, or vandalism on walls and surfaces",
 
     # High Priority
-    "homeless encampment": "Tents, encampments, sleeping bags on sidewalks/streets",
-    "abandoned vehicle": "Derelict or abandoned vehicles on or near the road",
+    "tent": "Tents, encampments, sleeping bags on sidewalks/streets",
+    "car": "Abandoned or parked vehicles on or near the road",
     "illegal dumping": "Large items illegally dumped on street",
 
     # Medium Priority
