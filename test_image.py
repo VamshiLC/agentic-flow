@@ -21,6 +21,7 @@ def main():
     parser.add_argument("--confidence", type=float, default=0.25, help="Confidence threshold")
     parser.add_argument("--detect", type=str, help="Comma-separated list of things to detect (e.g., 'pothole,crack,manhole')")
     parser.add_argument("--prompt", type=str, help="Single item to detect (e.g., 'pothole')")
+    parser.add_argument("--model", type=str, default="Qwen/Qwen2.5-VL-3B-Instruct", help="Qwen model to use (e.g., Qwen/Qwen2.5-VL-7B-Instruct)")
     args = parser.parse_args()
 
     if not args.image and not args.folder:
@@ -50,6 +51,7 @@ def main():
 
     print("\nLoading detector...")
     detector = InfrastructureDetectionAgentHF(
+        model_name=args.model,
         use_quantization=args.quantization,
         sam3_confidence=args.confidence,
         categories=categories,
