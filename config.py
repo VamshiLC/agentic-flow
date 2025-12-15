@@ -10,8 +10,8 @@ class Config:
     """Main configuration class for the detection agent"""
 
     # ===== Model Configuration =====
-    # Qwen3-VL settings
-    QWEN_MODEL = "Qwen/Qwen3-VL-4B-Instruct"
+    # Qwen2.5-VL settings (Updated to 7B for better accuracy)
+    QWEN_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
     QWEN_SERVER_URL = os.getenv("QWEN_SERVER_URL", "http://0.0.0.0:8001/v1")
     QWEN_API_KEY = os.getenv("LLM_API_KEY", "DUMMY_API_KEY")
 

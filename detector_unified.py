@@ -1,8 +1,8 @@
 """
-Agentic Infrastructure Detector - Qwen3-VL + SAM3
+Agentic Infrastructure Detector - Qwen2.5-VL + SAM3
 
 Uses agentic pipeline:
-1. Qwen3-VL-4B-Instruct: Detects infrastructure issues with bounding boxes
+1. Qwen2.5-VL-7B-Instruct: Detects infrastructure issues with bounding boxes
 2. SAM3 (Segment Anything Model 3): Generates segmentation masks for each detection
 """
 import torch
@@ -74,33 +74,36 @@ except ImportError:
 
 class UnifiedInfrastructureDetector:
     """
-    Agentic Infrastructure Detector using Qwen3-VL + SAM3.
+    Agentic Infrastructure Detector using Qwen2.5-VL + SAM3.
 
     This detector uses:
-    - Qwen3-VL-4B-Instruct: Vision-language model for detection
+    - Qwen2.5-VL-7B-Instruct: Vision-language model for detection
     - SAM3: Segment Anything Model 3 for precise segmentation masks
     """
 
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen3-VL-4B-Instruct",
+        model_name: str = "Qwen/Qwen2.5-VL-7B-Instruct",
         categories: Optional[List[str]] = None,
         device: Optional[str] = None,
         use_quantization: bool = False,
-        low_memory: bool = False
+        low_memory: bool = False,
+        exclude_categories: Optional[List[str]] = None
     ):
         """
         Initialize agentic detector with Qwen3-VL + SAM3.
 
         Args:
             model_name: Hugging Face model ID for Qwen3-VL
-            categories: List of categories to detect (default: all 12 categories)
+            categories: List of categories to detect (default: all 15 categories)
             device: Device to use ("cuda", "cpu", or None for auto-detect)
             use_quantization: Use 8-bit quantization (reduces memory by ~50%)
             low_memory: Enable low memory optimizations
+            exclude_categories: Categories to completely exclude (e.g., ["graffiti", "tyre_marks"])
         """
         self.model_name = model_name
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.exclude_categories = exclude_categories or []
 
         # Set categories
         if categories is None:
@@ -122,7 +125,8 @@ class UnifiedInfrastructureDetector:
             categories=self.categories,
             device=device,
             use_quantization=use_quantization,
-            low_memory=low_memory
+            low_memory=low_memory,
+            exclude_categories=self.exclude_categories
         )
 
     def detect_infrastructure(

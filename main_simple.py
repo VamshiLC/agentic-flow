@@ -392,8 +392,8 @@ Note: All processing now uses the agentic pipeline (Qwen3-VL for detection + SAM
     )
     parser.add_argument(
         "--model",
-        default="Qwen/Qwen3-VL-4B-Instruct",
-        help="Model to use (default: Qwen3-VL-4B-Instruct)"
+        default="Qwen/Qwen2.5-VL-7B-Instruct",
+        help="Model to use (default: Qwen2.5-VL-7B-Instruct)"
     )
     parser.add_argument(
         "--quantize",

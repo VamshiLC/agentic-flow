@@ -34,13 +34,14 @@ class InfrastructureDetectionAgentHF:
 
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen3-VL-4B-Instruct",
+        model_name: str = "Qwen/Qwen2.5-VL-7B-Instruct",
         sam3_processor=None,
         categories: Optional[List[str]] = None,
         device: Optional[str] = None,
         use_quantization: bool = False,
         low_memory: bool = False,
-        sam3_confidence: float = 0.3  # Lower threshold to accept more masks
+        sam3_confidence: float = 0.3,  # Lower threshold to accept more masks
+        exclude_categories: Optional[List[str]] = None
     ):
         """
         Initialize the agentic detector.
@@ -57,11 +58,15 @@ class InfrastructureDetectionAgentHF:
         self.model_name = model_name
         self.categories = categories
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.exclude_categories = exclude_categories or []
+        self.sam3_confidence = sam3_confidence
 
         print(f"\nInitializing Agentic Detector (Qwen3-VL + SAM3)")
         print(f"  Model: {model_name}")
         print(f"  Device: {self.device}")
         print(f"  SAM3 confidence: {sam3_confidence}")
+        if self.exclude_categories:
+            print(f"  Excluded categories: {', '.join(self.exclude_categories)}")
 
         # Load Qwen3-VL detector (the "brain")
         self.qwen_detector = Qwen3VLDirectDetector(
@@ -186,9 +191,23 @@ class InfrastructureDetectionAgentHF:
 
             enhanced_detections.append(det)
 
+        # Apply post-processing filters to reduce false positives
+        try:
+            from detection_filters import apply_filters
+            image_array = np.array(image)
+            filtered_detections = apply_filters(
+                enhanced_detections,
+                image_array.shape[:2],
+                exclude_categories=self.exclude_categories
+            )
+            logger.debug(f"Filtered {len(enhanced_detections)} -> {len(filtered_detections)} detections")
+        except Exception as e:
+            logger.warning(f"Filter failed, using unfiltered detections: {e}")
+            filtered_detections = enhanced_detections
+
         return {
-            'detections': enhanced_detections,
-            'num_detections': len(enhanced_detections),
+            'detections': filtered_detections,
+            'num_detections': len(filtered_detections),
             'has_masks': True
         }
 
