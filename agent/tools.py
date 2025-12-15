@@ -642,9 +642,13 @@ Then call select_masks_and_return with ONLY the accepted mask IDs.
                 scores = sam3_output.get('scores', [])
                 boxes = sam3_output.get('boxes', [])
                 print(f"      [SAM3] Found {len(raw_masks)} raw masks")
-                if scores:
-                    score_vals = [s.item() if hasattr(s, 'item') else s for s in scores[:5]]
-                    print(f"      [SAM3] Score samples: {score_vals}")
+                # Handle tensor/list scores safely
+                if scores is not None and (isinstance(scores, list) and len(scores) > 0) or (hasattr(scores, 'numel') and scores.numel() > 0):
+                    try:
+                        score_vals = [s.item() if hasattr(s, 'item') else s for s in scores[:5]]
+                        print(f"      [SAM3] Score samples: {score_vals}")
+                    except:
+                        pass
             elif hasattr(sam3_output, 'masks'):
                 raw_masks = sam3_output.masks
                 scores = getattr(sam3_output, 'scores', [])

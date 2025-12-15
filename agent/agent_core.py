@@ -101,6 +101,112 @@ class InfrastructureDetectionAgentCore:
 
         logger.info(f"Agent initialized with max_turns={self.config.max_turns}")
 
+    def _fuzzy_category_match(self, user_input: str, detected_label: str) -> bool:
+        """
+        Fuzzy matching to handle typos in user input.
+
+        Examples that should match:
+        - "abonded vechile" → "abandoned vehicle" (typos)
+        - "vehicle" → "abandoned vehicle" (partial)
+        - "car" → "abandoned vehicle" (synonym)
+
+        Args:
+            user_input: What user typed (may have typos)
+            detected_label: What Qwen detected
+
+        Returns:
+            True if they match semantically
+        """
+        # Normalize
+        user_input = user_input.lower().strip()
+        detected_label = detected_label.lower().strip()
+
+        # 1. Exact match
+        if user_input == detected_label:
+            return True
+
+        # 2. Substring match (either direction)
+        if user_input in detected_label or detected_label in user_input:
+            return True
+
+        # 3. Word overlap - any word from user matches any word in label
+        user_words = set(user_input.split())
+        label_words = set(detected_label.split())
+        if user_words & label_words:  # Intersection
+            return True
+
+        # 4. Fuzzy word matching (handles typos like "abonded" → "abandoned")
+        for user_word in user_words:
+            for label_word in label_words:
+                if self._levenshtein_similar(user_word, label_word, threshold=0.7):
+                    return True
+
+        # 5. Synonym matching for common terms
+        synonyms = {
+            'vehicle': ['car', 'automobile', 'truck', 'van', 'vehicle'],
+            'car': ['vehicle', 'automobile', 'car'],
+            'abandoned': ['abonded', 'abandond', 'abandonded', 'abandoned', 'derelict'],
+            'pothole': ['pothole', 'hole', 'pit'],
+            'crack': ['crack', 'cracks', 'fracture'],
+            'trash': ['trash', 'garbage', 'litter', 'debris'],
+            'tent': ['tent', 'encampment', 'camp', 'homeless'],
+            'graffiti': ['graffiti', 'grafiti', 'spray', 'tag', 'vandalism'],
+            'manhole': ['manhole', 'drain', 'grate', 'cover'],
+        }
+
+        # Check if any user word is synonym of any label word
+        for user_word in user_words:
+            for base, syns in synonyms.items():
+                if user_word in syns or self._levenshtein_similar(user_word, base, 0.7):
+                    # User word matches this synonym group
+                    for label_word in label_words:
+                        if label_word in syns or label_word == base:
+                            return True
+
+        return False
+
+    def _levenshtein_similar(self, s1: str, s2: str, threshold: float = 0.7) -> bool:
+        """
+        Check if two strings are similar using Levenshtein distance.
+
+        Args:
+            s1, s2: Strings to compare
+            threshold: Minimum similarity ratio (0.0 to 1.0)
+
+        Returns:
+            True if similarity >= threshold
+        """
+        if not s1 or not s2:
+            return False
+
+        # Quick check for very similar lengths
+        len_diff = abs(len(s1) - len(s2))
+        max_len = max(len(s1), len(s2))
+        if len_diff > max_len * (1 - threshold):
+            return False
+
+        # Levenshtein distance
+        if len(s1) < len(s2):
+            s1, s2 = s2, s1
+
+        if len(s2) == 0:
+            return len(s1) == 0
+
+        previous_row = range(len(s2) + 1)
+        for i, c1 in enumerate(s1):
+            current_row = [i + 1]
+            for j, c2 in enumerate(s2):
+                insertions = previous_row[j + 1] + 1
+                deletions = current_row[j] + 1
+                substitutions = previous_row[j] + (c1 != c2)
+                current_row.append(min(insertions, deletions, substitutions))
+            previous_row = current_row
+
+        distance = previous_row[-1]
+        similarity = 1 - (distance / max_len)
+
+        return similarity >= threshold
+
     def _optimize_memory_before_sam3(self):
         """
         MEMORY OPTIMIZATION: Clear Qwen model from GPU before SAM3 segmentation.
@@ -208,10 +314,9 @@ class InfrastructureDetectionAgentCore:
             filtered = []
             for det in detections:
                 label = det['label'].lower().strip()
-                # Check if detection matches any user category
+                # Check if detection matches any user category (with fuzzy matching for typos)
                 for cat in user_cats:
-                    # Match: "abandoned vehicle" matches "abandoned", "vehicle", "car", etc.
-                    if cat in label or label in cat or any(word in label for word in cat.split()):
+                    if self._fuzzy_category_match(cat, label):
                         filtered.append(det)
                         break
             print(f"Filtering to match: {self.config.categories}")
