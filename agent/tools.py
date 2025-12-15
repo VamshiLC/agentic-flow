@@ -307,10 +307,8 @@ class ToolExecutor:
 
     def _get_best_sam3_mask_for_bbox(self, label: str, bbox: List[int]) -> np.ndarray:
         """
-        Get the ONE SAM3 mask that best matches Qwen's bounding box.
-
-        This prevents SAM3 from returning too many masks and making image messy.
-        Only returns mask that has good overlap with Qwen's detected bbox.
+        Get SAM3 mask using text prompt. If multiple masks found, pick best one for bbox.
+        If no good match, just return the best SAM3 mask (don't be too strict).
         """
         try:
             x1, y1, x2, y2 = bbox
@@ -323,25 +321,34 @@ class ToolExecutor:
             )
 
             if not output:
+                logger.debug(f"SAM3 returned None for '{label}'")
                 return None
 
-            # Extract masks
+            # Extract masks using multiple methods
             raw_masks = []
             scores = []
 
             if isinstance(output, dict):
                 raw_masks = output.get('masks', [])
                 scores = output.get('scores', [])
+                if not raw_masks:
+                    raw_masks = output.get('mask', [])
             elif hasattr(output, 'masks'):
                 raw_masks = output.masks
                 scores = getattr(output, 'scores', [])
+            elif isinstance(output, (list, tuple)):
+                raw_masks = output
+            elif hasattr(output, 'cpu') or isinstance(output, np.ndarray):
+                raw_masks = [output]
+
+            logger.debug(f"SAM3 '{label}': {len(raw_masks)} masks found")
 
             if not raw_masks:
                 return None
 
-            # Find mask with BEST IoU with Qwen's bbox
+            # Find mask with BEST overlap with bbox
             best_mask = None
-            best_iou = 0.15  # Minimum 15% IoU required
+            best_score = 0
 
             for i, mask in enumerate(raw_masks):
                 # Convert to numpy
@@ -358,22 +365,41 @@ class ToolExecutor:
 
                 mask_binary = (mask_np > 0.5)
 
-                # Create bbox mask
-                bbox_mask = np.zeros((h, w), dtype=bool)
-                bbox_mask[y1:y2, x1:x2] = True
+                # Calculate overlap with bbox (not strict IoU)
+                bbox_region = mask_binary[y1:y2, x1:x2]
+                overlap = np.sum(bbox_region)
+                bbox_area = (y2 - y1) * (x2 - x1)
 
-                # Calculate IoU
-                intersection = np.sum(mask_binary & bbox_mask)
-                union = np.sum(mask_binary | bbox_mask)
+                # Score: how much of bbox is covered by mask
+                if bbox_area > 0:
+                    coverage = overlap / bbox_area
 
-                if union > 0:
-                    iou = intersection / union
-                    if iou > best_iou:
-                        best_iou = iou
+                    # Boost score with SAM3 confidence
+                    sam_conf = 1.0
+                    if scores and i < len(scores):
+                        s = scores[i]
+                        sam_conf = s.item() if hasattr(s, 'item') else float(s)
+
+                    score = coverage * (1 + sam_conf)
+
+                    if score > best_score:
+                        best_score = score
                         best_mask = mask_np
 
-            if best_mask is not None:
+            # Return best mask if any overlap (minimum 5% coverage)
+            if best_mask is not None and best_score > 0.05:
                 return (best_mask > 0.5).astype(np.uint8) * 255
+
+            # Fallback: return first mask if SAM3 found something
+            if raw_masks:
+                mask = raw_masks[0]
+                if hasattr(mask, 'cpu'):
+                    mask_np = mask.cpu().numpy()
+                else:
+                    mask_np = np.array(mask)
+                if mask_np.ndim > 2:
+                    mask_np = mask_np.squeeze()
+                return (mask_np > 0.5).astype(np.uint8) * 255
 
             return None
 
