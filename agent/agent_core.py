@@ -284,50 +284,74 @@ class InfrastructureDetectionAgentCore:
         )
 
     def _ask_qwen_to_detect_with_boxes(self, image: Image.Image) -> List[Dict]:
-        """Ask Qwen to detect infrastructure issues with bounding boxes."""
+        """Ask Qwen to detect - category by category for accuracy."""
         img_width, img_height = image.size
 
-        # Qwen2.5-VL grounding prompt - be specific and use detection language
-        prompt = f"""You are an object detection model. Locate and draw bounding boxes around these objects in the image:
+        # All categories organized by group
+        CATEGORIES = {
+            "road_defects": [
+                ("potholes", "holes or depressions in road pavement"),
+                ("alligator_cracks", "web-like interconnected cracks in pavement"),
+                ("longitudinal_cracks", "cracks running along the road direction"),
+                ("transverse_cracks", "cracks running across the road"),
+                ("road_surface_damage", "damaged or broken road surface"),
+            ],
+            "social_issues": [
+                ("abandoned_vehicle", "old, damaged, or abandoned cars/vehicles"),
+                ("homeless_encampment", "tents, tarps, makeshift shelters"),
+                ("homeless_person", "person sleeping or sitting on street"),
+            ],
+            "infrastructure": [
+                ("manholes", "round metal manhole covers on road"),
+                ("damaged_paint", "faded or worn road paint markings"),
+                ("damaged_crosswalks", "faded pedestrian crossing lines"),
+                ("dumped_trash", "garbage, debris, illegally dumped items"),
+                ("street_signs", "road signs, traffic signs"),
+                ("traffic_lights", "traffic signal lights"),
+                ("tyre_marks", "tire skid marks on road"),
+            ],
+        }
 
-1. potholes - holes in road
-2. alligator_cracks - web-like cracks in pavement
-3. longitudinal_cracks - long cracks along road
-4. transverse_cracks - cracks across road
-5. road_surface_damage - any road damage
-6. abandoned_vehicle - old/damaged cars
-7. homeless_encampment - tents, tarps, shelters
-8. homeless_person - people on street
-9. manholes - round metal covers on road
-10. damaged_paint - faded road markings
-11. damaged_crosswalks - faded crosswalk lines
-12. dumped_trash - garbage, debris
-13. street_signs - any road signs
-14. traffic_lights - signal lights
-15. tyre_marks - tire skid marks
+        all_detections = []
 
-Output ONLY a JSON array. For each object found, give exact pixel coordinates:
-[{{"label": "name", "bbox_2d": [x1, y1, x2, y2]}}]
+        # Search each category separately for accuracy
+        for group_name, categories in CATEGORIES.items():
+            print(f"\n[{group_name.upper()}]")
+            for category, description in categories:
+                detections = self._detect_single_category(image, category, description, img_width, img_height)
+                if detections:
+                    print(f"  ✓ {category}: {len(detections)} found")
+                    all_detections.extend(detections)
+                else:
+                    print(f"  - {category}: 0")
 
-Image size is {img_width}x{img_height}. Be precise with coordinates.
-If empty image or no objects: []"""
+        return all_detections
+
+    def _detect_single_category(self, image: Image.Image, category: str, description: str, img_width: int, img_height: int) -> List[Dict]:
+        """Detect a single category - focused search."""
+        prompt = f"""Detect all "{category}" in this image.
+{category}: {description}
+
+If you see any {category}, output JSON with bounding boxes:
+[{{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}]
+
+Image: {img_width}x{img_height} pixels.
+If no {category} found, return: []"""
 
         try:
             result = self.qwen_detector.detect(image, prompt)
-            print(f"Qwen response success: {result.get('success')}")
             if not result.get("success"):
-                print(f"Qwen error: {result.get('error', 'Unknown error')}")
                 return []
             response_text = result.get("text", "")
-            print(f"Qwen raw response:\n{response_text[:1000]}")
             detections = self._parse_json_detection_response(response_text, img_width, img_height)
-            print(f"Parsed {len(detections)} detections")
-            return detections
+            # Filter to only this category
+            filtered = [d for d in detections if category.lower() in d['label'].lower() or d['label'].lower() in category.lower()]
+            # Force correct label
+            for d in filtered:
+                d['label'] = category
+            return filtered
         except Exception as e:
-            logger.error(f"Qwen error: {e}")
-            print(f"Qwen exception: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Detection error for {category}: {e}")
             return []
 
     def _parse_json_detection_response(self, response: str, img_width: int, img_height: int) -> List[Dict]:
