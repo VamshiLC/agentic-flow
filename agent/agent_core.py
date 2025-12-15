@@ -548,36 +548,41 @@ class InfrastructureDetectionAgentCore:
         return all_detections
 
     def _detect_single_category(self, image: Image.Image, category: str, description: str, img_width: int, img_height: int) -> List[Dict]:
-        """Detect a single category - STRICT detection to avoid false positives."""
+        """Detect a single category."""
 
-        # STRICT prompt - must be CERTAIN before detecting
-        prompt = f"""Analyze this image for: {category}
+        # Special STRICT prompt for potholes only (to avoid false positives)
+        if category == "potholes":
+            prompt = f"""Analyze this image for: potholes
 
-Definition: {description}
+A pothole is a HOLE or DEPRESSION in the road surface with visible DEPTH.
 
-CRITICAL RULES - READ CAREFULLY:
-1. Only detect REAL, CLEAR instances of {category}
-2. DO NOT detect shadows - shadows are NOT {category}
-3. DO NOT detect normal road texture or color variations
-4. DO NOT detect wet spots or reflections
-5. DO NOT guess or assume - if you're not 100% CERTAIN, output []
+CRITICAL - DO NOT DETECT:
+- Shadows (they have no depth)
+- Dark patches or stains
+- Normal road texture
+- Wet spots or reflections
 
-For POTHOLES specifically:
-- Must be an actual HOLE or DEPRESSION in the road
-- Must have visible DEPTH (you can see into it)
-- Shadows, dark patches, and stains are NOT potholes
-- Clean roads with no damage should return []
+ONLY detect if you see an ACTUAL HOLE with visible depth/damage.
 
-For CRACKS specifically:
-- Must be actual BREAKS in the pavement surface
-- Lines, paint, or normal road joints are NOT cracks
-
-If you find a REAL {category} with HIGH CONFIDENCE, output JSON:
-[{{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}]
+If you find REAL potholes, output JSON:
+[{{"label": "potholes", "bbox_2d": [x1, y1, x2, y2]}}]
 
 Image size: {img_width} x {img_height} pixels.
 
-If NO {category} exists or you are NOT CERTAIN, output: []"""
+If NO potholes exist, output: []"""
+        else:
+            # Normal prompt for all other categories
+            prompt = f"""Look at this image. Find ALL instances of: {category}
+
+What to look for: {description}
+
+Output format - JSON array with bounding boxes:
+[{{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}]
+
+Image size: {img_width} x {img_height} pixels.
+x1,y1 = top-left corner. x2,y2 = bottom-right corner.
+
+If you find {category}, output the JSON. If nothing found, output: []"""
 
         try:
             result = self.qwen_detector.detect(image, prompt)
