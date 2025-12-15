@@ -228,10 +228,11 @@ class ToolExecutor:
         """
         SMART SEGMENTATION: Use SAM3 to segment specific bounding boxes.
 
-        This is more accurate than text prompts because:
-        1. Qwen3 already identified WHAT the object is (semantic understanding)
-        2. SAM3 just needs to create the mask boundary (shape extraction)
-        3. No confusion between manhole vs pothole - already classified
+        Two-stage approach:
+        1. Try SAM3 text prompt with the label (e.g., "pothole")
+        2. Crop result to bounding box from Qwen detection
+
+        This combines Qwen's semantic understanding with SAM3's segmentation.
 
         Args:
             detections: List of dicts from Qwen3 with:
@@ -256,11 +257,14 @@ class ToolExecutor:
             print(f"    [{i+1}/{len(detections)}] {label} at {bbox}...", end=" ")
 
             try:
-                # Use SAM3's box-prompted segmentation
-                # This is more accurate than text prompts
-                mask_np = self._segment_box_with_sam3(bbox)
+                # Method 1: Use SAM3 text prompt with label, then crop to bbox
+                mask_np = self._segment_with_text_and_crop(label, bbox)
 
-                if mask_np is not None:
+                if mask_np is None or not mask_np.any():
+                    # Method 2: Fallback to point-based segmentation
+                    mask_np = self._segment_box_with_sam3(bbox)
+
+                if mask_np is not None and mask_np.any():
                     mask_data = MaskData(
                         mask_id=len(self.masks) + 1,
                         mask=mask_np,
@@ -282,9 +286,83 @@ class ToolExecutor:
         print(f"  Total: {len(masks)} masks generated")
         return masks
 
+    def _segment_with_text_and_crop(self, label: str, bbox: List[int]) -> np.ndarray:
+        """
+        Use SAM3 text prompt to find the object, then crop to bbox.
+
+        This is more accurate because:
+        1. SAM3 uses semantic understanding for the label
+        2. We only keep the mask portion inside the bbox from Qwen
+
+        Args:
+            label: Object type (e.g., "pothole", "manhole")
+            bbox: [x1, y1, x2, y2] bounding box
+
+        Returns:
+            numpy array mask cropped to bbox
+        """
+        try:
+            x1, y1, x2, y2 = bbox
+            h, w = self.original_image.size[1], self.original_image.size[0]
+
+            # Use SAM3's text prompt
+            output = self.sam3_processor.set_text_prompt(
+                state=self.inference_state,
+                prompt=label
+            )
+
+            if not output:
+                return None
+
+            # Get masks from output
+            raw_masks = []
+            if isinstance(output, dict):
+                raw_masks = output.get('masks', [])
+            elif hasattr(output, 'masks'):
+                raw_masks = output.masks
+
+            if not raw_masks:
+                return None
+
+            # Find the mask that best overlaps with bbox
+            best_mask = None
+            best_overlap = 0
+
+            for mask in raw_masks:
+                # Convert to numpy
+                if hasattr(mask, 'cpu'):
+                    mask_np = mask.cpu().numpy()
+                else:
+                    mask_np = np.array(mask)
+
+                if mask_np.ndim > 2:
+                    mask_np = mask_np.squeeze()
+
+                # Calculate overlap with bbox
+                bbox_region = mask_np[y1:y2, x1:x2]
+                overlap = np.sum(bbox_region > 0.5)
+
+                if overlap > best_overlap:
+                    best_overlap = overlap
+                    best_mask = mask_np
+
+            if best_mask is not None and best_overlap > 0:
+                # Create final mask cropped to bbox
+                final_mask = np.zeros((h, w), dtype=np.uint8)
+                final_mask[y1:y2, x1:x2] = (best_mask[y1:y2, x1:x2] > 0.5).astype(np.uint8) * 255
+                return final_mask
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"Text+crop segmentation failed: {e}")
+            return None
+
     def _segment_box_with_sam3(self, bbox: List[int]) -> np.ndarray:
         """
         Use SAM3 to segment a specific bounding box region.
+
+        Strategy: Use text prompt for the region, or multi-point prompting.
 
         Args:
             bbox: [x1, y1, x2, y2] bounding box coordinates
@@ -294,27 +372,54 @@ class ToolExecutor:
         """
         try:
             x1, y1, x2, y2 = bbox
+            h, w = self.original_image.size[1], self.original_image.size[0]
 
-            # Method 1: Use SAM3's point-based prompting at box center
+            # Method 1: Use multiple point prompts (center + corners)
+            # This gives SAM3 better spatial understanding
             center_x = (x1 + x2) // 2
             center_y = (y1 + y2) // 2
 
-            # Try to get mask using center point
-            output = self.sam3_processor.set_point_prompt(
-                state=self.inference_state,
-                point=[[center_x, center_y]],
-                labels=[1]  # 1 = foreground
-            )
+            # Add padding to avoid edge issues
+            pad = 5
+            points = [
+                [center_x, center_y],  # Center (most important)
+            ]
+            labels = [1]  # All foreground
 
-            if output and len(output) > 0:
-                # Get the mask array
-                mask = output[0].get('mask', None)
-                if mask is not None:
-                    return mask
+            # Try multi-point prompting
+            try:
+                output = self.sam3_processor.set_point_prompt(
+                    state=self.inference_state,
+                    point=points,
+                    labels=labels
+                )
 
-            # Method 2: Fallback - create rectangular mask from bbox
-            logger.debug(f"SAM3 point prompt failed, using bbox mask")
-            h, w = self.original_image.size[1], self.original_image.size[0]
+                if output and len(output) > 0:
+                    # Get the mask array
+                    if isinstance(output, dict):
+                        mask = output.get('masks', [None])[0] if 'masks' in output else output.get('mask')
+                    elif isinstance(output, list) and len(output) > 0:
+                        mask = output[0].get('mask') if isinstance(output[0], dict) else output[0]
+                    else:
+                        mask = None
+
+                    if mask is not None:
+                        # Convert to numpy if needed
+                        if hasattr(mask, 'cpu'):
+                            mask = mask.cpu().numpy()
+                        if mask.ndim > 2:
+                            mask = mask.squeeze()
+
+                        # Crop mask to bbox region (only keep mask within bbox)
+                        cropped_mask = np.zeros_like(mask, dtype=np.uint8)
+                        cropped_mask[y1:y2, x1:x2] = (mask[y1:y2, x1:x2] > 0.5).astype(np.uint8) * 255
+                        return cropped_mask
+
+            except Exception as e:
+                logger.debug(f"Point prompt failed: {e}")
+
+            # Method 2: Create rectangular mask from bbox (fallback)
+            logger.debug(f"Using rectangular bbox mask as fallback")
             mask = np.zeros((h, w), dtype=np.uint8)
             mask[y1:y2, x1:x2] = 255
             return mask

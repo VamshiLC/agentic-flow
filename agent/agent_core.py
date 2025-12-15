@@ -568,12 +568,10 @@ IMPORTANT: Be STRICT. Only Accept if the mask clearly shows the claimed object t
 
     def _ask_qwen_to_detect_with_boxes(self, image: Image.Image) -> List[Dict]:
         """
-        SMART DETECTION: Ask Qwen3-VL to detect objects WITH bounding boxes.
+        SMART DETECTION: Ask Qwen2.5-VL to detect objects WITH bounding boxes.
 
-        This is the key improvement - Qwen identifies WHAT and WHERE:
-        1. Qwen3-VL understands semantics (manhole vs pothole)
-        2. Returns precise bounding boxes for each detection
-        3. SAM3 only needs to segment those boxes (not guess from text)
+        Uses Qwen2.5-VL's native JSON grounding format:
+        {"bbox_2d": [x1, y1, x2, y2], "label": "object"}
 
         Returns:
             List of dicts: [{'label': str, 'bbox': [x1,y1,x2,y2], 'confidence': float}]
@@ -581,57 +579,37 @@ IMPORTANT: Be STRICT. Only Accept if the mask clearly shows the claimed object t
         # Get image dimensions for coordinate validation
         width, height = image.size
 
-        detection_prompt = f"""You are an infrastructure inspection AI. Analyze this image and detect ALL infrastructure issues.
+        # Use Qwen2.5-VL's native JSON grounding format
+        detection_prompt = f"""Detect all infrastructure issues in this road/street image.
 
-IMAGE SIZE: {width} x {height} pixels
+Return results as a JSON array. For each object found, include:
+- "bbox_2d": [x1, y1, x2, y2] coordinates in pixels (image is {width}x{height})
+- "label": the object type
+- "confidence": detection confidence 0.0-1.0
 
-For EACH issue you find, output in this EXACT format:
-<detection>
-label: [object type]
-bbox: [x1, y1, x2, y2]
-confidence: [0.0-1.0]
-</detection>
+OBJECTS TO DETECT:
+1. pothole - Irregular holes/damage in road surface showing broken pavement
+2. manhole - Round or rectangular METAL covers (utility access, has patterns/text)
+3. crack - Linear fractures in pavement
+4. graffiti - Spray paint, tags on walls/surfaces
+5. debris - Trash, garbage on road
+6. street_sign - Traffic or road signs
+7. traffic_light - Signal lights
 
-CATEGORIES TO DETECT:
-- pothole: Irregular holes/depressions in road surface (NOT manholes, NOT shadows)
-- manhole: Round or rectangular METAL covers with patterns/text (infrastructure, NOT damage)
-- crack: Linear fractures/breaks in pavement
-- graffiti: Spray paint, tags, or painted text on walls/surfaces
-- abandoned_vehicle: Clearly abandoned cars/vehicles
-- debris: Trash, garbage, objects on road
-- street_sign: Traffic or regulatory signs
-- traffic_light: Signal lights
+IMPORTANT DISTINCTIONS:
+- MANHOLE: Metal cover, circular/rectangular, has pattern/grid/text, flush with road
+- POTHOLE: Irregular shape, shows broken/missing pavement, has depth
+- Do NOT detect shadows, wet spots, or normal road markings
 
-CRITICAL DISTINCTIONS:
-- MANHOLE = Metal cover with patterns, flush with road (infrastructure)
-- POTHOLE = Irregular hole showing broken pavement (damage)
-- Do NOT confuse these - they look different!
+Return JSON array format:
+```json
+[
+  {{"bbox_2d": [x1, y1, x2, y2], "label": "manhole", "confidence": 0.95}},
+  {{"bbox_2d": [x1, y1, x2, y2], "label": "pothole", "confidence": 0.85}}
+]
+```
 
-BBOX FORMAT:
-- [x1, y1, x2, y2] = [left, top, right, bottom] in pixels
-- x1 < x2, y1 < y2
-- All values must be within image bounds (0-{width}, 0-{height})
-
-EXAMPLE OUTPUT:
-<detection>
-label: manhole
-bbox: [120, 340, 220, 440]
-confidence: 0.95
-</detection>
-<detection>
-label: pothole
-bbox: [450, 280, 580, 360]
-confidence: 0.85
-</detection>
-
-If you see NOTHING relevant, output:
-<detection>
-label: none
-bbox: [0, 0, 0, 0]
-confidence: 0.0
-</detection>
-
-BE STRICT: Only report objects you are confident about. Do NOT report shadows or normal road texture."""
+If nothing found, return: []"""
 
         try:
             result = self.qwen_detector.detect(image, detection_prompt)
@@ -641,10 +619,10 @@ BE STRICT: Only report objects you are confident about. Do NOT report shadows or
                 return []
 
             response = result.get("text", "")
-            print(f"Qwen response: {response[:500]}...")
+            print(f"Qwen response: {response[:800]}...")
 
-            # Parse detections with bboxes
-            detections = self._parse_detection_response(response, width, height)
+            # Parse JSON response (Qwen2.5-VL native format)
+            detections = self._parse_json_detection_response(response, width, height)
 
             if detections:
                 print(f"Qwen detected {len(detections)} objects:")
@@ -652,8 +630,11 @@ BE STRICT: Only report objects you are confident about. Do NOT report shadows or
                     print(f"  - {d['label']}: bbox={d['bbox']}, conf={d['confidence']:.2f}")
                 logger.info(f"Qwen detected: {[d['label'] for d in detections]}")
             else:
-                print("Qwen found no objects")
-                logger.warning("Qwen found nothing")
+                print("Qwen found no objects in JSON format, trying XML fallback...")
+                # Fallback to XML-style parsing
+                detections = self._parse_detection_response(response, width, height)
+                if detections:
+                    print(f"Fallback found {len(detections)} objects")
 
             return detections
 
@@ -661,6 +642,66 @@ BE STRICT: Only report objects you are confident about. Do NOT report shadows or
             logger.error(f"Qwen detection error: {e}")
             print(f"Qwen detection error: {e}")
             return []
+
+    def _parse_json_detection_response(self, response: str, img_width: int, img_height: int) -> List[Dict]:
+        """
+        Parse Qwen2.5-VL's native JSON grounding response.
+
+        Expected format:
+        [{"bbox_2d": [x1, y1, x2, y2], "label": "pothole", "confidence": 0.85}, ...]
+        """
+        import json
+        import re
+
+        detections = []
+
+        try:
+            # Try to find JSON array in response
+            # Look for [...] pattern
+            json_match = re.search(r'\[[\s\S]*?\]', response)
+            if json_match:
+                json_str = json_match.group(0)
+                # Clean up the JSON string
+                json_str = json_str.replace("'", '"')
+
+                try:
+                    parsed = json.loads(json_str)
+
+                    if isinstance(parsed, list):
+                        for item in parsed:
+                            if isinstance(item, dict):
+                                # Handle bbox_2d format (Qwen2.5-VL native)
+                                bbox = item.get('bbox_2d') or item.get('bbox') or item.get('box')
+                                label = item.get('label', 'unknown')
+                                confidence = item.get('confidence', 0.8)
+
+                                if bbox and len(bbox) == 4:
+                                    x1, y1, x2, y2 = [int(b) for b in bbox]
+
+                                    # Validate bbox
+                                    if x1 >= x2 or y1 >= y2:
+                                        continue
+
+                                    # Clamp to image bounds
+                                    x1 = max(0, min(x1, img_width))
+                                    y1 = max(0, min(y1, img_height))
+                                    x2 = max(0, min(x2, img_width))
+                                    y2 = max(0, min(y2, img_height))
+
+                                    if x1 < x2 and y1 < y2:
+                                        detections.append({
+                                            'label': label.lower().strip(),
+                                            'bbox': [x1, y1, x2, y2],
+                                            'confidence': float(confidence)
+                                        })
+
+                except json.JSONDecodeError as e:
+                    logger.debug(f"JSON parse failed: {e}")
+
+        except Exception as e:
+            logger.debug(f"JSON detection parsing failed: {e}")
+
+        return detections
 
     def _parse_detection_response(self, response: str, img_width: int, img_height: int) -> List[Dict]:
         """
