@@ -178,12 +178,14 @@ class InfrastructureDetectionAgentCore:
         """
         QWEN ONLY - Clean bounding box detection.
         NO SAM3 - just Qwen detecting and drawing boxes.
+        Saves output organized by category folders.
         """
         start_time = time.time()
         from PIL import ImageDraw, ImageFont
+        import json
 
         print(f"\n{'='*60}")
-        print(f"QWEN DETECTION (Bounding Boxes Only)")
+        print(f"QWEN DETECTION (Category by Category)")
         print(f"{'='*60}")
 
         # Ask Qwen to detect with bounding boxes
@@ -210,13 +212,7 @@ class InfrastructureDetectionAgentCore:
                 message="No infrastructure issues detected"
             )
 
-        print(f"\nQwen found {len(detections)} objects:")
-        for det in detections:
-            print(f"  - {det['label']} at {det['bbox']}")
-
-        # Draw bounding boxes
-        result_image = image.copy()
-        draw = ImageDraw.Draw(result_image)
+        print(f"\nTotal found: {len(detections)} objects")
 
         # Colors for CATEGORY_GROUPS
         colors = {
@@ -247,17 +243,83 @@ class InfrastructureDetectionAgentCore:
         except:
             font = ImageFont.load_default()
 
+        # Group detections by category
+        by_category = {}
+        for det in detections:
+            cat = det['label']
+            if cat not in by_category:
+                by_category[cat] = []
+            by_category[cat].append(det)
+
+        # Create output directory structure
+        output_base = self.config.debug_dir if self.config.debug else "output"
+        os.makedirs(output_base, exist_ok=True)
+
+        # Save per-category images and data
+        print(f"\n{'='*60}")
+        print(f"SAVING BY CATEGORY:")
+        print(f"{'='*60}")
+
         final_detections = []
-        for i, det in enumerate(detections):
+        detection_id = 0
+
+        for category, cat_detections in by_category.items():
+            # Create category folder
+            cat_folder = os.path.join(output_base, category)
+            os.makedirs(cat_folder, exist_ok=True)
+
+            # Draw image with only this category's detections
+            cat_image = image.copy()
+            cat_draw = ImageDraw.Draw(cat_image)
+
+            color = colors.get(category, (255, 255, 0))
+
+            cat_data = []
+            for det in cat_detections:
+                detection_id += 1
+                x1, y1, x2, y2 = det['bbox']
+                confidence = det.get('confidence', 0.8)
+
+                # Draw box
+                cat_draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
+                try:
+                    text_bbox = cat_draw.textbbox((x1, y1 - 20), category, font=font)
+                    cat_draw.rectangle([text_bbox[0]-2, text_bbox[1]-2, text_bbox[2]+2, text_bbox[3]+2], fill=color)
+                    cat_draw.text((x1, y1 - 20), category, fill=(0, 0, 0), font=font)
+                except:
+                    cat_draw.text((x1, y1 - 15), category, fill=color)
+
+                det_info = {
+                    "id": detection_id,
+                    "category": category,
+                    "bbox": det['bbox'],
+                    "confidence": confidence,
+                }
+                cat_data.append(det_info)
+                final_detections.append({
+                    "mask_id": detection_id, "category": category, "severity": "medium",
+                    "confidence": confidence, "bbox": det['bbox'], "mask": None,
+                })
+
+            # Save category image
+            cat_image_path = os.path.join(cat_folder, f"{category}.png")
+            cat_image.save(cat_image_path)
+
+            # Save category JSON
+            cat_json_path = os.path.join(cat_folder, f"{category}.json")
+            with open(cat_json_path, 'w') as f:
+                json.dump({"category": category, "count": len(cat_data), "detections": cat_data}, f, indent=2)
+
+            print(f"  ✓ {category}: {len(cat_detections)} detections -> {cat_folder}/")
+
+        # Create combined image with all detections
+        result_image = image.copy()
+        draw = ImageDraw.Draw(result_image)
+
+        for det in detections:
             label = det['label']
             x1, y1, x2, y2 = det['bbox']
-            confidence = det.get('confidence', 0.8)
-
-            color = (255, 255, 0)
-            for key, c in colors.items():
-                if key in label.lower():
-                    color = c
-                    break
+            color = colors.get(label, (255, 255, 0))
 
             draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
             try:
@@ -267,10 +329,17 @@ class InfrastructureDetectionAgentCore:
             except:
                 draw.text((x1, y1 - 15), label, fill=color)
 
-            final_detections.append({
-                "mask_id": i + 1, "category": label, "severity": "medium",
-                "confidence": confidence, "bbox": det['bbox'], "mask": None,
-            })
+        # Save summary JSON
+        summary = {
+            "total_detections": len(final_detections),
+            "categories_found": list(by_category.keys()),
+            "by_category": {cat: len(dets) for cat, dets in by_category.items()},
+            "detections": final_detections,
+        }
+        summary_path = os.path.join(output_base, "summary.json")
+        with open(summary_path, 'w') as f:
+            json.dump(summary, f, indent=2)
+        print(f"\n  Summary: {summary_path}")
 
         elapsed = time.time() - start_time
         print(f"\n{'='*60}")
