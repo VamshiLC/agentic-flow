@@ -573,9 +573,20 @@ IMPORTANT: Be STRICT. Only Accept if the mask clearly shows the claimed object t
         SIMPLE: Ask Qwen what infrastructure issues it sees.
         Returns list of things to search with SAM3.
         """
-        detection_prompt = """Describe this image in detail. What do you see?
-Look for: walls, text on walls, road surface, metal covers, signs, lights.
-Describe everything visible."""
+        detection_prompt = """Analyze this street/road image and identify ANY of these issues if present:
+
+1. ROAD DAMAGE: potholes, cracks, broken pavement
+2. GRAFFITI: spray paint, tags, vandalism on walls
+3. MANHOLES: metal covers, drain grates on road
+4. TRASH/DEBRIS: garbage, litter, dumped items
+5. HOMELESS: tents, encampments, sleeping bags, belongings
+6. ABANDONED VEHICLES: cars, trucks that look abandoned
+7. DAMAGED SIGNS: broken, bent, defaced signs
+8. DAMAGED LIGHTS: broken street lights
+9. ILLEGAL DUMPING: large items dumped on street
+10. BLOCKED SIDEWALKS: obstructions
+
+List everything you see. Be specific about any problems or issues."""
 
         try:
             result = self.qwen_detector.detect(image, detection_prompt)
@@ -588,42 +599,65 @@ Describe everything visible."""
             print(f"Qwen says: {response}")
 
             # Extract what Qwen found - map to search terms
-            # Extract ALL infrastructure issues from Qwen's description
+            # COMPREHENSIVE keyword list for all infrastructure issues
             found_items = []
             keywords = {
                 # Graffiti
                 'graffiti': 'graffiti',
                 'spray paint': 'graffiti',
                 'vandalism': 'graffiti',
-                'painted': 'graffiti',
-                'mural': 'graffiti',
+                'tag': 'graffiti',
+                'tagged': 'graffiti',
                 # Road damage
                 'pothole': 'pothole',
                 'potholes': 'pothole',
                 'crack': 'crack',
                 'cracked': 'crack',
-                'damage': 'road damage',
+                'broken pavement': 'pothole',
                 # Manholes
                 'manhole': 'manhole',
                 'manhole cover': 'manhole',
                 'metal cover': 'manhole',
                 'grate': 'manhole',
                 'drain': 'manhole',
-                # Debris
-                'debris': 'debris',
+                'drainage': 'manhole',
+                # Trash & Debris
+                'debris': 'trash',
                 'trash': 'trash',
                 'garbage': 'trash',
                 'litter': 'trash',
+                'dumped': 'illegal dumping',
+                'illegal dumping': 'illegal dumping',
+                # Homeless / Encampments
+                'homeless': 'homeless encampment',
+                'tent': 'homeless encampment',
+                'encampment': 'homeless encampment',
+                'sleeping bag': 'homeless encampment',
+                'belongings': 'homeless encampment',
+                'camp': 'homeless encampment',
+                # Abandoned vehicles
+                'abandoned': 'abandoned vehicle',
+                'abandoned vehicle': 'abandoned vehicle',
+                'derelict': 'abandoned vehicle',
+                'broken down car': 'abandoned vehicle',
                 # Signs
                 'sign': 'sign',
                 'traffic sign': 'traffic sign',
                 'street sign': 'street sign',
+                'damaged sign': 'damaged sign',
+                'broken sign': 'damaged sign',
+                'bent sign': 'damaged sign',
                 # Lights
                 'traffic light': 'traffic light',
                 'street light': 'street light',
+                'broken light': 'damaged light',
+                'damaged light': 'damaged light',
                 # Crosswalk
                 'crosswalk': 'crosswalk',
                 'pedestrian crossing': 'crosswalk',
+                # Sidewalk issues
+                'blocked sidewalk': 'blocked sidewalk',
+                'obstruction': 'blocked sidewalk',
             }
 
             for keyword, label in keywords.items():

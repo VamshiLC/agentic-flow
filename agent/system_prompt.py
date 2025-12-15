@@ -10,24 +10,27 @@ Customized for road infrastructure detection with 12 categories.
 # Infrastructure categories with descriptions
 INFRASTRUCTURE_CATEGORIES = {
     # Critical (Red - High Priority)
-    "potholes": "Holes or depressions in the road pavement surface",
-    "alligator_cracks": "Web-like interconnected cracks resembling alligator skin pattern",
-    "spray paint on wall": "Spray paint, tags, or vandalism on walls and surfaces",
-    "painted text on wall": "Graffiti text or writing on walls",
+    "pothole": "Holes or depressions in the road pavement surface",
+    "crack": "Cracks in road pavement",
+    "graffiti": "Spray paint, tags, or vandalism on walls and surfaces",
 
-    # Medium Priority (Yellow)
-    "abandoned_vehicles": "Derelict or abandoned vehicles on or near the road",
+    # High Priority
+    "homeless encampment": "Tents, encampments, sleeping bags on sidewalks/streets",
+    "abandoned vehicle": "Derelict or abandoned vehicles on or near the road",
+    "illegal dumping": "Large items illegally dumped on street",
 
-    # Low Priority (Green - Monitoring)
-    "longitudinal_cracks": "Cracks running parallel to the direction of traffic",
-    "transverse_cracks": "Cracks running perpendicular to the direction of traffic",
-    "damaged_paint": "Deteriorated or faded road markings and painted lines",
-    "manholes": "Manhole covers and utility access points on the road",
-    "dumped_trash": "Debris, litter, or illegally dumped items on roadway",
-    "street_signs": "Traffic signs, street name signs, regulatory signs",
-    "traffic_lights": "Traffic signal lights and poles",
-    "tyre_marks": "Tire marks or skid marks on pavement surface",
-    "damaged_crosswalks": "Deteriorated or faded pedestrian crosswalk markings",
+    # Medium Priority
+    "trash": "Debris, litter, garbage on roadway or sidewalk",
+    "blocked sidewalk": "Obstructions blocking pedestrian path",
+
+    # Infrastructure
+    "manhole": "Manhole covers and utility access points on the road",
+    "sign": "Traffic signs, street name signs, regulatory signs",
+    "damaged sign": "Broken, bent, or defaced signs",
+    "traffic light": "Traffic signal lights and poles",
+    "street light": "Street lights",
+    "damaged light": "Broken or non-functioning lights",
+    "crosswalk": "Pedestrian crosswalk markings",
 }
 
 # Tool definitions in OpenAI function calling format
