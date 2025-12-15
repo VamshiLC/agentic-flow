@@ -262,46 +262,36 @@ class ToolExecutor:
 
         print(f"  Segmenting {len(detections)} detected objects with SAM3...")
 
-        new_masks = []
+        # Get unique labels from detections
+        unique_labels = list(set(det['label'] for det in detections))
+        print(f"  Unique categories to segment: {unique_labels}")
 
-        for i, det in enumerate(detections):
-            label = det['label']
-            bbox = det['bbox']
-            confidence = det.get('confidence', 0.8)
+        # Use SAM3 text prompts for each unique label (same as sam3.png!)
+        for label in unique_labels:
+            # Get SAM3-friendly label
+            label_variants = self._get_sam3_friendly_labels(label)
 
-            print(f"    [{i+1}/{len(detections)}] {label} at {bbox}...", end=" ")
+            for variant in label_variants:
+                # Skip if already used this prompt
+                if variant.lower() in self.used_prompts:
+                    continue
 
-            try:
-                # Get SAM3-friendly labels for this detection
-                label_variants = self._get_sam3_friendly_labels(label)
+                print(f"    SAM3 searching for '{variant}'...", end=" ")
 
-                found_mask = False
-                for variant in label_variants:
-                    # Get SAM3 mask that MATCHES Qwen's bbox (not all masks!)
-                    mask_np = self._get_best_sam3_mask_for_bbox(variant, bbox)
+                # Call _segment_phrase - this is what works in sam3.png!
+                result = self._segment_phrase({"text_prompt": variant})
 
-                    if mask_np is not None and mask_np.any():
-                        mask_data = MaskData(
-                            mask_id=len(self.masks) + 1,
-                            mask=mask_np,
-                            bbox=bbox,
-                            category=label,
-                            score=confidence,
-                            text_prompt=variant,
-                        )
-                        self.masks.append(mask_data)
-                        new_masks.append(mask_data)
-                        print(f"('{variant}') ✓")
-                        found_mask = True
-                        break
+                if result.success and result.data.get("num_masks", 0) > 0:
+                    num_found = result.data.get("num_masks", 0)
+                    print(f"✓ found {num_found} mask(s)")
+                    # Update category to match Qwen's label
+                    for m in self.masks[-num_found:]:
+                        m.category = label
+                    break
+                else:
+                    print("✗ no masks")
 
-                if not found_mask:
-                    print("✗ (no matching mask)")
-
-            except Exception as e:
-                print(f"✗ ({e})")
-                logger.error(f"Box segmentation failed for {label}: {e}")
-
+        new_masks = self.masks
         print(f"  Total: {len(new_masks)} masks generated")
         return new_masks
 
