@@ -630,9 +630,9 @@ Then call select_masks_and_return with ONLY the accepted mask IDs.
 
         draw = ImageDraw.Draw(image)
 
-        # Try to load font, fall back to default
+        # Try to load font, fall back to default - SMALLER SIZE
         try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
         except:
             font = ImageFont.load_default()
 
@@ -641,16 +641,16 @@ Then call select_masks_and_return with ONLY the accepted mask IDs.
             if bbox and len(bbox) == 4:
                 x1, y1, x2, y2 = bbox
 
-                # Show category name instead of just ID
+                # Short label - just category name
                 category_display = mask_data.category.replace("_", " ").title()
-                label = f"{mask_data.mask_id}: {category_display}"
+                label = category_display  # Removed ID prefix for cleaner look
 
                 # Draw label background
-                text_bbox = draw.textbbox((x1, y1 - 25), label, font=font)
-                draw.rectangle(text_bbox, fill=(0, 0, 0))
+                text_bbox = draw.textbbox((x1, y1 - 15), label, font=font)
+                draw.rectangle(text_bbox, fill=(0, 0, 0, 180))
 
                 # Draw label text
-                draw.text((x1, y1 - 25), label, fill=(255, 255, 255), font=font)
+                draw.text((x1, y1 - 15), label, fill=(255, 255, 255), font=font)
 
                 # Draw bbox outline
                 color = self.COLORS[(mask_data.mask_id - 1) % len(self.COLORS)]
