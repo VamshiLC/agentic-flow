@@ -204,18 +204,20 @@ class InfrastructureDetectionAgentCore:
 
         # Filter by user categories if specified
         if self.config.categories and detections:
-            user_cats = [c.lower() for c in self.config.categories]
+            user_cats = [c.lower().strip() for c in self.config.categories]
             filtered = []
             for det in detections:
-                label = det['label'].lower()
+                label = det['label'].lower().strip()
                 # Check if detection matches any user category
                 for cat in user_cats:
-                    if cat in label or label in cat:
+                    # Match: "abandoned vehicle" matches "abandoned", "vehicle", "car", etc.
+                    if cat in label or label in cat or any(word in label for word in cat.split()):
                         filtered.append(det)
                         break
-            if filtered:
-                print(f"Filtered to {len(filtered)} detections matching: {self.config.categories}")
-                detections = filtered
+            print(f"Filtering to match: {self.config.categories}")
+            print(f"  Before: {len(detections)} detections")
+            print(f"  After: {len(filtered)} detections")
+            detections = filtered  # Always apply filter when categories specified
 
         if not detections:
             print("Qwen didn't find any objects with bounding boxes.")
@@ -641,34 +643,38 @@ IMPORTANT: Be STRICT. Only Accept if the mask clearly shows the claimed object t
         img_width, img_height = image.size
 
         # Use Qwen2.5-VL's grounding detection capability
-        grounding_prompt = f"""Analyze this image and detect ALL infrastructure issues and objects of concern.
+        grounding_prompt = f"""Analyze this street/road image and detect infrastructure PROBLEMS only.
 
-For EACH issue or object you find, provide the bounding box coordinates.
+IMPORTANT: Only detect things that are ACTUAL PROBLEMS, not normal objects.
 
-IMPORTANT CATEGORIES TO DETECT:
-- potholes (holes in road surface)
-- cracks (lines/damage in pavement)
-- manholes (circular metal covers on road)
-- graffiti (spray paint on walls/surfaces)
-- trash/debris (garbage, litter)
-- tents/encampments (homeless camps, tarps, sleeping areas)
-- abandoned vehicles (cars that look abandoned, damaged, or parked illegally)
-- damaged signs (broken, bent, or defaced road signs)
-- blocked sidewalks (obstructions on walkways)
+CATEGORIES TO DETECT:
+- pothole: ONLY holes/depressions in road surface with visible damage
+- crack: ONLY visible cracks/fractures in pavement
+- manhole: Metal covers/grates on road (for inventory, not damage)
+- graffiti: Spray paint/tags/vandalism on walls/surfaces
+- trash: Garbage, litter, debris on street/sidewalk
+- tent/encampment: Homeless camps, tarps, sleeping bags on sidewalk
+- abandoned vehicle: ONLY vehicles that are CLEARLY abandoned - look for: broken windows, flat tires, rust, damage, covered in dirt/debris, missing parts. Do NOT include normal parked cars!
+- damaged sign: ONLY broken/bent/defaced signs, not normal signs
+- blocked sidewalk: Physical obstructions blocking pedestrian path
 
-OUTPUT FORMAT - Return a JSON array like this:
+CRITICAL RULES:
+1. Normal parked cars are NOT abandoned vehicles
+2. A vehicle is ABANDONED only if it shows clear signs: damage, flat tires, broken glass, rust, debris
+3. Only detect actual PROBLEMS, not normal infrastructure
+
+OUTPUT FORMAT - Return JSON array:
 [
   {{"label": "pothole", "bbox_2d": [x1, y1, x2, y2]}},
-  {{"label": "car", "bbox_2d": [x1, y1, x2, y2]}},
-  {{"label": "tent", "bbox_2d": [x1, y1, x2, y2]}}
+  {{"label": "abandoned vehicle", "bbox_2d": [x1, y1, x2, y2]}}
 ]
 
-Where x1,y1 is top-left corner and x2,y2 is bottom-right corner in PIXELS.
-Image size is {img_width}x{img_height} pixels.
+Coordinates: x1,y1 = top-left, x2,y2 = bottom-right in PIXELS.
+Image size: {img_width}x{img_height} pixels.
 
-If NO issues found, return: []
+If NO problems found, return: []
 
-Detect EVERYTHING visible. Be thorough."""
+Be STRICT - only real problems, not normal objects."""
 
         try:
             result = self.qwen_detector.detect(image, grounding_prompt)
