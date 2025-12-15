@@ -142,16 +142,16 @@ class InfrastructureDetectionAgentHF:
         if user_query is None:
             user_query = "Analyze this road image and detect all infrastructure issues."
 
-        # Create agent config - SMART mode with LLM validation
-        # SAM3 finds candidates, LLM validates each one
+        # Create agent config - SMART mode with strict LLM validation
+        # SAM3 finds candidates, LLM validates each one with detailed reasoning
         config = AgentConfig(
             max_turns=self.max_turns,
             categories=self.categories,
             debug=self.debug,
             debug_dir="debug",
             force_all_categories=True,  # Search categories with SAM3
-            validate_with_llm=True,  # LLM validates each mask (smart!)
-            confidence_threshold=0.25,  # Initial threshold
+            validate_with_llm=True,  # LLM validates each mask with <think> reasoning
+            confidence_threshold=0.4,  # Higher threshold to reduce initial false positives
         )
 
         # Create and run agent

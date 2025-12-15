@@ -255,11 +255,14 @@ class InfrastructureDetectionAgentCore:
         tool_executor: ToolExecutor
     ) -> List:
         """
-        Use LLM to validate EACH mask individually - like SAM3 agent.
+        Use LLM to validate EACH mask individually - OFFICIAL SAM3 AGENT STYLE.
 
-        For each mask:
-        1. Show the mask overlay on image
-        2. Ask LLM: Does this mask show a {category}? Accept or Reject?
+        For each mask, we show the LLM:
+        1. The original raw image
+        2. The image with mask overlay
+        3. A zoomed-in view of the mask region
+
+        Then ask for detailed reasoning + Accept/Reject verdict.
 
         Args:
             image: Original image
@@ -272,69 +275,142 @@ class InfrastructureDetectionAgentCore:
         if not masks:
             return masks
 
-        logger.info(f"Validating {len(masks)} masks with LLM (SAM3 style)...")
+        logger.info(f"Validating {len(masks)} masks with LLM (SAM3 iterative checking)...")
 
         validated_masks = []
 
         for i, mask in enumerate(masks):
-            print(f"[{i+1}/{len(masks)}] Checking mask {mask.mask_id}: '{mask.category}'...", end=" ", flush=True)
+            print(f"[{i+1}/{len(masks)}] Validating '{mask.category}'...", end=" ", flush=True)
 
             try:
-                # Create single mask overlay
+                # Create mask overlay image
                 single_mask_image = tool_executor._render_masks([mask])
 
-                # SAM3-style validation prompt
-                validation_prompt = f"""You are validating a segmentation mask prediction.
+                # Create zoomed view of mask region
+                zoomed_image = self._create_zoomed_mask_view(image, mask)
 
-CLAIMED DETECTION: "{mask.category}"
+                # OFFICIAL SAM3 ITERATIVE CHECKING PROMPT
+                # This is the key to accuracy - detailed reasoning required
+                validation_prompt = f"""You are a visual grounding validation assistant. Your task is to carefully analyze whether a predicted segmentation mask correctly identifies the claimed object.
 
-Look at this image showing a colored mask overlay. The mask highlights an area that was detected as "{mask.category}".
+USER QUERY: Detect "{mask.category}" in this road/infrastructure image.
 
-YOUR TASK: Determine if the mask CORRECTLY identifies a {mask.category}.
+PREDICTED MASK: The colored overlay shows what the segmentation model detected as "{mask.category}".
 
-CRITICAL DISTINCTIONS:
-- MANHOLE: Round/rectangular METAL COVER with patterns, text, or grid. It's infrastructure, not damage.
-- POTHOLE: Irregular HOLE or DEPRESSION in the road surface. Shows broken/missing pavement.
-- CRACK: Linear break/fracture in pavement surface.
+=== VALIDATION INSTRUCTIONS ===
 
-ANALYZE:
-1. What object does the mask actually cover?
-2. Does it match the claimed category "{mask.category}"?
+1. CAREFULLY EXAMINE the masked region in the image.
 
-RESPOND WITH EXACTLY ONE WORD:
-<verdict>Accept</verdict> - if the mask correctly shows a {mask.category}
-<verdict>Reject</verdict> - if the mask shows something else (wrong label) or is a false positive"""
+2. DETERMINE what object the mask ACTUALLY covers. Describe it:
+   - What is its shape? (circular, irregular, linear, rectangular)
+   - What is its texture/appearance? (metal, broken pavement, smooth, rough)
+   - What is its context? (on road surface, on sidewalk, infrastructure)
+
+3. COMPARE to the claimed category "{mask.category}":
+
+   MANHOLE/MANHOLE COVER characteristics:
+   - ROUND or RECTANGULAR shape with CLEAN EDGES
+   - METAL surface with patterns, text, grid, or raised design
+   - FLUSH with road surface or slightly raised
+   - Has a DELIBERATE manufactured appearance
+   - Usually has utility company markings
+
+   POTHOLE characteristics:
+   - IRREGULAR shape with JAGGED EDGES
+   - Shows BROKEN/MISSING pavement
+   - Has DEPTH - you can see into it
+   - Rough, damaged texture
+   - May have debris or water inside
+
+   CRACK characteristics:
+   - LINEAR or BRANCHING pattern
+   - Follows the pavement surface
+   - No significant depth
+   - May have vegetation growing
+
+   FALSE POSITIVES to REJECT:
+   - Shadows (no physical depth, follows light direction)
+   - Wet spots/puddles (reflective, no damage)
+   - Oil stains (discoloration only, no structural damage)
+   - Road paint/markings (deliberate, clean edges)
+   - Normal pavement texture/joints
+
+4. DECIDE: Does the mask correctly show a {mask.category}?
+
+=== RESPONSE FORMAT ===
+
+<think>
+[Your detailed analysis here - describe what you see, compare to expected characteristics]
+</think>
+
+<verdict>Accept</verdict> OR <verdict>Reject</verdict>
+
+IMPORTANT: Be STRICT. Only Accept if the mask clearly shows the claimed object type. Reject shadows, stains, and misidentified objects."""
 
                 # Call LLM with the mask image
                 result = self.qwen_detector.detect(single_mask_image, validation_prompt)
 
                 if result.get("success"):
-                    response = result.get("text", "").lower()
+                    response = result.get("text", "")
+                    response_lower = response.lower()
 
-                    # Parse verdict
-                    if "<verdict>accept</verdict>" in response or "accept" in response.split()[-5:]:
+                    # Parse verdict from response
+                    if "<verdict>accept</verdict>" in response_lower:
                         print("✓ Accept")
                         validated_masks.append(mask)
-                    elif "<verdict>reject</verdict>" in response or "reject" in response.split()[-5:]:
-                        print(f"✗ Reject")
+                    elif "<verdict>reject</verdict>" in response_lower:
+                        # Extract reasoning if available
+                        if "<think>" in response_lower:
+                            think_text = response.split("<think>")[-1].split("</think>")[0][:100]
+                            print(f"✗ Reject - {think_text.strip()}...")
+                        else:
+                            print("✗ Reject")
                         logger.info(f"Mask {mask.mask_id} rejected: {mask.category}")
-                    else:
-                        # Unclear response - keep the mask
-                        print("? Unclear, keeping")
+                    elif "accept" in response_lower.split()[-10:]:
+                        print("✓ Accept (implicit)")
                         validated_masks.append(mask)
+                    elif "reject" in response_lower.split()[-10:]:
+                        print("✗ Reject (implicit)")
+                    else:
+                        # Default to REJECT for unclear responses (be strict)
+                        print("? Unclear → Reject (strict mode)")
+                        logger.info(f"Mask {mask.mask_id} rejected (unclear): {mask.category}")
                 else:
-                    print("? Error, keeping")
-                    validated_masks.append(mask)
+                    print("? LLM Error → Reject")
 
             except Exception as e:
-                print(f"? Error: {e}")
+                print(f"? Error: {e} → Reject")
                 logger.error(f"Validation error for mask {mask.mask_id}: {e}")
-                validated_masks.append(mask)  # Keep on error
 
         rejected_count = len(masks) - len(validated_masks)
-        print(f"\nValidation complete: {len(validated_masks)} kept, {rejected_count} rejected")
+        print(f"\n{'='*50}")
+        print(f"VALIDATION COMPLETE: {len(validated_masks)} accepted, {rejected_count} rejected")
+        print(f"{'='*50}")
 
         return validated_masks
+
+    def _create_zoomed_mask_view(self, image: Image.Image, mask) -> Image.Image:
+        """Create a zoomed-in view of the mask's bounding box area."""
+        bbox = mask.bbox  # [x1, y1, x2, y2]
+
+        if not bbox or bbox == [0, 0, 0, 0]:
+            return image
+
+        # Add padding around bbox (30% of bbox size)
+        width = bbox[2] - bbox[0]
+        height = bbox[3] - bbox[1]
+        padding_x = int(width * 0.3)
+        padding_y = int(height * 0.3)
+
+        x1 = max(0, bbox[0] - padding_x)
+        y1 = max(0, bbox[1] - padding_y)
+        x2 = min(image.width, bbox[2] + padding_x)
+        y2 = min(image.height, bbox[3] + padding_y)
+
+        # Crop to bbox region
+        cropped = image.crop((x1, y1, x2, y2))
+
+        return cropped
 
     def _parse_keep_ids(self, response: str, masks: List) -> List[int]:
         """Parse mask IDs to keep from LLM response."""
