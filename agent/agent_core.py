@@ -50,6 +50,7 @@ class AgentConfig:
     force_all_categories: bool = True  # Search ALL categories directly with SAM3
     validate_with_llm: bool = False  # Skip slow LLM validation
     confidence_threshold: float = 0.25  # Lower threshold to catch more
+    optimize_memory: bool = True  # Clear Qwen from GPU before SAM3 segmentation
 
 
 @dataclass
@@ -100,6 +101,55 @@ class InfrastructureDetectionAgentCore:
 
         logger.info(f"Agent initialized with max_turns={self.config.max_turns}")
 
+    def _optimize_memory_before_sam3(self):
+        """
+        MEMORY OPTIMIZATION: Clear Qwen model from GPU before SAM3 segmentation.
+
+        This is crucial because:
+        1. Qwen3 detection is DONE at this point
+        2. SAM3 needs full GPU for accurate segmentation
+        3. Having both loaded causes OOM on 22GB GPUs
+
+        The Qwen detector can be reloaded lazily for the next image.
+        """
+        try:
+            print("  [Memory] Optimizing GPU memory for SAM3...")
+
+            # Check if qwen_detector has model to unload
+            if hasattr(self.qwen_detector, 'model') and self.qwen_detector.model is not None:
+                # Move model to CPU (don't delete, just offload)
+                if hasattr(self.qwen_detector.model, 'to'):
+                    self.qwen_detector.model.to('cpu')
+                    print("  [Memory] Moved Qwen model to CPU")
+
+            # Clear CUDA cache
+            torch.cuda.empty_cache()
+
+            # Log memory stats
+            if torch.cuda.is_available():
+                allocated = torch.cuda.memory_allocated() / 1024**3
+                reserved = torch.cuda.memory_reserved() / 1024**3
+                print(f"  [Memory] GPU: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved")
+
+        except Exception as e:
+            logger.warning(f"Memory optimization failed (non-critical): {e}")
+            # Continue anyway - this is just an optimization
+
+    def _reload_qwen_to_gpu(self):
+        """
+        Reload Qwen model back to GPU after SAM3 is done.
+
+        Used for batch processing where we need Qwen for the next image.
+        """
+        try:
+            if hasattr(self.qwen_detector, 'model') and self.qwen_detector.model is not None:
+                device = self.qwen_detector.device
+                if device == "cuda" and torch.cuda.is_available():
+                    self.qwen_detector.model.to(device)
+                    print("  [Memory] Reloaded Qwen model to GPU")
+        except Exception as e:
+            logger.warning(f"Failed to reload Qwen to GPU: {e}")
+
     def run(
         self,
         image: Image.Image,
@@ -126,47 +176,131 @@ class InfrastructureDetectionAgentCore:
 
     def _run_direct_category_search(self, image: Image.Image) -> AgentResult:
         """
-        SMART approach: Qwen VL detects first, then SAM3 segments.
+        SMART approach: Qwen VL detects with bboxes first, then SAM3 segments those boxes.
 
-        1. Ask Qwen VL to analyze the image and identify what's actually there
-        2. Only search for categories that Qwen VL found
-        3. SAM3 segments those specific items
-        4. LLM validates each mask
+        NEW INTELLIGENT FLOW:
+        1. Ask Qwen VL to detect objects WITH bounding boxes
+        2. SAM3 segments ONLY those bounding boxes (not text prompts)
+        3. No validation loop needed - Qwen already identified the objects
+
+        This fixes the manhole vs pothole confusion because Qwen understands semantics.
         """
         start_time = time.time()
 
-        # If user specified categories, use those
-        if self.config.categories:
-            categories = self.config.categories
-            print(f"\n{'='*60}")
-            print(f"USER SPECIFIED: Searching for {categories}")
-            print(f"{'='*60}")
-        else:
-            # SMART: Ask Qwen VL what's in the image first
-            print(f"\n{'='*60}")
-            print(f"STEP 1: Qwen VL analyzing image...")
-            print(f"{'='*60}")
-
-            categories = self._ask_qwen_what_to_detect(image)
-
-            if not categories:
-                # Fallback to all categories if Qwen fails
-                categories = [
-                    "manhole", "pothole", "crack", "graffiti",
-                    "abandoned vehicle", "debris", "trash",
-                    "street sign", "traffic light"
-                ]
-                print(f"Qwen analysis failed, using default categories: {categories}")
-            else:
-                print(f"Qwen found these to search: {categories}")
-
-        print(f"\n{'='*60}")
-        print(f"STEP 2: SAM3 segmenting {len(categories)} items...")
-        print(f"{'='*60}")
-        logger.info(f"=== SEARCHING {len(categories)} CATEGORIES ===")
-
         # Initialize tool executor
         tool_executor = ToolExecutor(self.sam3_processor, image)
+
+        # If user specified categories, use old text-prompt approach
+        if self.config.categories:
+            return self._run_text_prompt_search(image, self.config.categories, tool_executor, start_time)
+
+        # SMART DETECTION: Qwen3 detects with bboxes → SAM3 segments those boxes
+        print(f"\n{'='*60}")
+        print(f"SMART DETECTION MODE")
+        print(f"Step 1: Qwen VL detecting objects with bounding boxes...")
+        print(f"{'='*60}")
+
+        # Get detections with bounding boxes from Qwen
+        detections_with_boxes = self._ask_qwen_to_detect_with_boxes(image)
+
+        if not detections_with_boxes:
+            print("Qwen found no objects - trying fallback text prompt search...")
+            # Fallback to text prompt search
+            fallback_categories = [
+                "manhole", "pothole", "crack", "graffiti",
+                "abandoned vehicle", "debris", "street sign"
+            ]
+            return self._run_text_prompt_search(image, fallback_categories, tool_executor, start_time)
+
+        # Filter by confidence threshold
+        detections_with_boxes = [
+            d for d in detections_with_boxes
+            if d.get('confidence', 0) >= self.config.confidence_threshold
+        ]
+
+        if not detections_with_boxes:
+            print(f"All detections below confidence threshold ({self.config.confidence_threshold})")
+            return AgentResult(
+                success=True,
+                detections=[],
+                num_detections=0,
+                final_image=image,
+                turns_taken=1,
+                message="No confident detections found"
+            )
+
+        # MEMORY OPTIMIZATION: Clear Qwen from GPU before SAM3 segmentation
+        if self.config.optimize_memory:
+            self._optimize_memory_before_sam3()
+
+        print(f"\n{'='*60}")
+        print(f"Step 2: SAM3 segmenting {len(detections_with_boxes)} detected objects...")
+        print(f"{'='*60}")
+
+        # SAM3 segments each detected bounding box
+        masks = tool_executor.segment_from_boxes(detections_with_boxes)
+
+        # Build final detections
+        if masks:
+            print(f"\n{'='*60}")
+            print(f"Step 3: Rendering {len(masks)} masks on image...")
+            print(f"{'='*60}")
+
+            detections = [
+                {
+                    "mask_id": m.mask_id,
+                    "category": m.category,
+                    "severity": tool_executor._category_to_severity(m.category),
+                    "confidence": m.score,
+                    "bbox": m.bbox,
+                    "mask": m.mask,
+                }
+                for m in masks
+            ]
+            final_image = tool_executor._render_masks(masks)
+            print(f"✓ Detection complete!")
+
+            # Summary
+            categories_found = list(set(m.category for m in masks))
+            print(f"\n{'='*60}")
+            print(f"RESULTS: {len(masks)} objects detected")
+            print(f"Categories: {categories_found}")
+            print(f"{'='*60}")
+        else:
+            print("\n⚠ SAM3 segmentation failed - returning original image")
+            detections = []
+            final_image = image
+
+        elapsed = time.time() - start_time
+        logger.info(f"Smart detection complete: {len(detections)} issues in {elapsed:.2f}s")
+
+        return AgentResult(
+            success=True,
+            detections=detections,
+            num_detections=len(detections),
+            final_image=final_image,
+            turns_taken=1,
+            message=f"Found {len(detections)} infrastructure issues using smart detection"
+        )
+
+    def _run_text_prompt_search(
+        self,
+        image: Image.Image,
+        categories: List[str],
+        tool_executor: ToolExecutor,
+        start_time: float
+    ) -> AgentResult:
+        """
+        Fallback: Search using SAM3 text prompts (old approach).
+
+        Used when:
+        - User specifies specific categories
+        - Smart detection fails
+        """
+        print(f"\n{'='*60}")
+        print(f"TEXT PROMPT SEARCH: {len(categories)} categories")
+        print(f"{'='*60}")
+        logger.info(f"=== SEARCHING {len(categories)} CATEGORIES ===")
 
         # Search EVERY category
         found_categories = []
@@ -427,67 +561,172 @@ IMPORTANT: Be STRICT. Only Accept if the mask clearly shows the claimed object t
     def _ask_qwen_what_to_detect(self, image: Image.Image) -> List[str]:
         """
         Ask Qwen VL to analyze the image and tell us what infrastructure issues are present.
-        This is the SMART part - let the VLM decide what to look for.
+        Returns list of category names for fallback mode.
         """
-        analysis_prompt = """Analyze this image carefully. List ALL infrastructure issues, objects, or problems you can see.
+        detections = self._ask_qwen_to_detect_with_boxes(image)
+        return [d['label'] for d in detections]
 
-LOOK FOR:
-- Road damage: potholes (holes in road), cracks (lines/fractures in pavement), road damage
-- Infrastructure: manholes (metal covers), street signs, traffic lights, crosswalks
-- Objects: abandoned vehicles, debris, trash, garbage on road
-- Vandalism: graffiti (spray paint on walls/surfaces)
-- Encampments: tents, homeless encampments
-- Other: tyre marks, skid marks
+    def _ask_qwen_to_detect_with_boxes(self, image: Image.Image) -> List[Dict]:
+        """
+        SMART DETECTION: Ask Qwen3-VL to detect objects WITH bounding boxes.
 
-For EACH issue you see, output it as a simple phrase.
+        This is the key improvement - Qwen identifies WHAT and WHERE:
+        1. Qwen3-VL understands semantics (manhole vs pothole)
+        2. Returns precise bounding boxes for each detection
+        3. SAM3 only needs to segment those boxes (not guess from text)
 
-OUTPUT FORMAT (one per line):
-DETECTED: [item]
-DETECTED: [item]
-...
+        Returns:
+            List of dicts: [{'label': str, 'bbox': [x1,y1,x2,y2], 'confidence': float}]
+        """
+        # Get image dimensions for coordinate validation
+        width, height = image.size
 
-Example:
-DETECTED: manhole
-DETECTED: pothole
-DETECTED: graffiti on wall
+        detection_prompt = f"""You are an infrastructure inspection AI. Analyze this image and detect ALL infrastructure issues.
 
-If you see NOTHING, output:
-DETECTED: none
+IMAGE SIZE: {width} x {height} pixels
 
-Be specific about what you actually see. Don't guess or imagine things that aren't there."""
+For EACH issue you find, output in this EXACT format:
+<detection>
+label: [object type]
+bbox: [x1, y1, x2, y2]
+confidence: [0.0-1.0]
+</detection>
+
+CATEGORIES TO DETECT:
+- pothole: Irregular holes/depressions in road surface (NOT manholes, NOT shadows)
+- manhole: Round or rectangular METAL covers with patterns/text (infrastructure, NOT damage)
+- crack: Linear fractures/breaks in pavement
+- graffiti: Spray paint, tags, or painted text on walls/surfaces
+- abandoned_vehicle: Clearly abandoned cars/vehicles
+- debris: Trash, garbage, objects on road
+- street_sign: Traffic or regulatory signs
+- traffic_light: Signal lights
+
+CRITICAL DISTINCTIONS:
+- MANHOLE = Metal cover with patterns, flush with road (infrastructure)
+- POTHOLE = Irregular hole showing broken pavement (damage)
+- Do NOT confuse these - they look different!
+
+BBOX FORMAT:
+- [x1, y1, x2, y2] = [left, top, right, bottom] in pixels
+- x1 < x2, y1 < y2
+- All values must be within image bounds (0-{width}, 0-{height})
+
+EXAMPLE OUTPUT:
+<detection>
+label: manhole
+bbox: [120, 340, 220, 440]
+confidence: 0.95
+</detection>
+<detection>
+label: pothole
+bbox: [450, 280, 580, 360]
+confidence: 0.85
+</detection>
+
+If you see NOTHING relevant, output:
+<detection>
+label: none
+bbox: [0, 0, 0, 0]
+confidence: 0.0
+</detection>
+
+BE STRICT: Only report objects you are confident about. Do NOT report shadows or normal road texture."""
 
         try:
-            result = self.qwen_detector.detect(image, analysis_prompt)
+            result = self.qwen_detector.detect(image, detection_prompt)
 
-            if result.get("success"):
-                response = result.get("text", "")
-                print(f"Qwen response: {response[:300]}...")
-
-                # Parse detected items
-                detected = []
-                for line in response.split("\n"):
-                    line = line.strip().lower()
-                    if "detected:" in line:
-                        item = line.split("detected:")[-1].strip()
-                        if item and item != "none":
-                            detected.append(item)
-
-                # Remove duplicates and clean up
-                detected = list(set(detected))
-
-                if detected:
-                    logger.info(f"Qwen detected: {detected}")
-                    return detected
-                else:
-                    logger.warning("Qwen found nothing")
-                    return []
-            else:
-                logger.error("Qwen analysis failed")
+            if not result.get("success"):
+                logger.error("Qwen detection failed")
                 return []
 
+            response = result.get("text", "")
+            print(f"Qwen response: {response[:500]}...")
+
+            # Parse detections with bboxes
+            detections = self._parse_detection_response(response, width, height)
+
+            if detections:
+                print(f"Qwen detected {len(detections)} objects:")
+                for d in detections:
+                    print(f"  - {d['label']}: bbox={d['bbox']}, conf={d['confidence']:.2f}")
+                logger.info(f"Qwen detected: {[d['label'] for d in detections]}")
+            else:
+                print("Qwen found no objects")
+                logger.warning("Qwen found nothing")
+
+            return detections
+
         except Exception as e:
-            logger.error(f"Qwen analysis error: {e}")
+            logger.error(f"Qwen detection error: {e}")
+            print(f"Qwen detection error: {e}")
             return []
+
+    def _parse_detection_response(self, response: str, img_width: int, img_height: int) -> List[Dict]:
+        """
+        Parse Qwen's detection response to extract bboxes.
+
+        Expected format:
+        <detection>
+        label: pothole
+        bbox: [120, 340, 220, 440]
+        confidence: 0.85
+        </detection>
+        """
+        import re
+
+        detections = []
+
+        # Find all detection blocks
+        detection_pattern = r'<detection>(.*?)</detection>'
+        blocks = re.findall(detection_pattern, response, re.DOTALL | re.IGNORECASE)
+
+        for block in blocks:
+            try:
+                # Extract label
+                label_match = re.search(r'label\s*:\s*(\w+)', block, re.IGNORECASE)
+                if not label_match:
+                    continue
+                label = label_match.group(1).lower().strip()
+
+                if label == 'none':
+                    continue
+
+                # Extract bbox
+                bbox_match = re.search(r'bbox\s*:\s*\[?\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]?', block)
+                if not bbox_match:
+                    continue
+
+                x1, y1, x2, y2 = map(int, bbox_match.groups())
+
+                # Validate bbox
+                if x1 >= x2 or y1 >= y2:
+                    continue
+                if x1 < 0 or y1 < 0 or x2 > img_width or y2 > img_height:
+                    # Clamp to image bounds
+                    x1 = max(0, min(x1, img_width))
+                    y1 = max(0, min(y1, img_height))
+                    x2 = max(0, min(x2, img_width))
+                    y2 = max(0, min(y2, img_height))
+
+                # Extract confidence
+                conf_match = re.search(r'confidence\s*:\s*([\d.]+)', block)
+                confidence = float(conf_match.group(1)) if conf_match else 0.8
+
+                # Validate confidence
+                confidence = max(0.0, min(1.0, confidence))
+
+                detections.append({
+                    'label': label,
+                    'bbox': [x1, y1, x2, y2],
+                    'confidence': confidence
+                })
+
+            except Exception as e:
+                logger.debug(f"Failed to parse detection block: {e}")
+                continue
+
+        return detections
 
     def _parse_keep_ids(self, response: str, masks: List) -> List[int]:
         """Parse mask IDs to keep from LLM response."""

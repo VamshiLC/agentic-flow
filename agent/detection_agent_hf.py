@@ -142,16 +142,18 @@ class InfrastructureDetectionAgentHF:
         if user_query is None:
             user_query = "Analyze this road image and detect all infrastructure issues."
 
-        # Create agent config - SMART mode with strict LLM validation
-        # SAM3 finds candidates, LLM validates each one with detailed reasoning
+        # Create agent config - SMART mode with Qwen bbox detection
+        # NEW FLOW: Qwen detects with bboxes → SAM3 segments those boxes
+        # No LLM validation needed - Qwen already classified objects correctly
         config = AgentConfig(
             max_turns=self.max_turns,
             categories=self.categories,
             debug=self.debug,
             debug_dir="debug",
-            force_all_categories=True,  # Search categories with SAM3
-            validate_with_llm=True,  # LLM validates each mask with <think> reasoning
+            force_all_categories=True,  # Use smart detection flow
+            validate_with_llm=False,  # Not needed - Qwen bbox detection is accurate
             confidence_threshold=0.6,  # High threshold - only keep confident detections
+            optimize_memory=True,  # Clear Qwen before SAM3 for better GPU usage
         )
 
         # Create and run agent

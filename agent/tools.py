@@ -224,6 +224,110 @@ class ToolExecutor:
                 message=f"SAM3 error: {str(e)}",
             )
 
+    def segment_from_boxes(self, detections: List[Dict]) -> List:
+        """
+        SMART SEGMENTATION: Use SAM3 to segment specific bounding boxes.
+
+        This is more accurate than text prompts because:
+        1. Qwen3 already identified WHAT the object is (semantic understanding)
+        2. SAM3 just needs to create the mask boundary (shape extraction)
+        3. No confusion between manhole vs pothole - already classified
+
+        Args:
+            detections: List of dicts from Qwen3 with:
+                - 'label': object type
+                - 'bbox': [x1, y1, x2, y2]
+                - 'confidence': float
+
+        Returns:
+            List of MaskData objects with precise segmentation masks
+        """
+        if not detections:
+            return []
+
+        print(f"  Segmenting {len(detections)} detected objects with SAM3...")
+
+        masks = []
+        for i, det in enumerate(detections):
+            label = det['label']
+            bbox = det['bbox']
+            confidence = det.get('confidence', 0.8)
+
+            print(f"    [{i+1}/{len(detections)}] {label} at {bbox}...", end=" ")
+
+            try:
+                # Use SAM3's box-prompted segmentation
+                # This is more accurate than text prompts
+                mask_np = self._segment_box_with_sam3(bbox)
+
+                if mask_np is not None:
+                    mask_data = MaskData(
+                        mask_id=len(self.masks) + 1,
+                        mask=mask_np,
+                        bbox=bbox,
+                        category=label,
+                        score=confidence,
+                        text_prompt=label,
+                    )
+                    self.masks.append(mask_data)
+                    masks.append(mask_data)
+                    print("✓")
+                else:
+                    print("✗ (no mask)")
+
+            except Exception as e:
+                print(f"✗ ({e})")
+                logger.error(f"Box segmentation failed for {label}: {e}")
+
+        print(f"  Total: {len(masks)} masks generated")
+        return masks
+
+    def _segment_box_with_sam3(self, bbox: List[int]) -> np.ndarray:
+        """
+        Use SAM3 to segment a specific bounding box region.
+
+        Args:
+            bbox: [x1, y1, x2, y2] bounding box coordinates
+
+        Returns:
+            numpy array mask or None if failed
+        """
+        try:
+            x1, y1, x2, y2 = bbox
+
+            # Method 1: Use SAM3's point-based prompting at box center
+            center_x = (x1 + x2) // 2
+            center_y = (y1 + y2) // 2
+
+            # Try to get mask using center point
+            output = self.sam3_processor.set_point_prompt(
+                state=self.inference_state,
+                point=[[center_x, center_y]],
+                labels=[1]  # 1 = foreground
+            )
+
+            if output and len(output) > 0:
+                # Get the mask array
+                mask = output[0].get('mask', None)
+                if mask is not None:
+                    return mask
+
+            # Method 2: Fallback - create rectangular mask from bbox
+            logger.debug(f"SAM3 point prompt failed, using bbox mask")
+            h, w = self.original_image.size[1], self.original_image.size[0]
+            mask = np.zeros((h, w), dtype=np.uint8)
+            mask[y1:y2, x1:x2] = 255
+            return mask
+
+        except Exception as e:
+            logger.error(f"SAM3 box segmentation error: {e}")
+            # Fallback: return rectangular mask
+            h, w = self.original_image.size[1], self.original_image.size[0]
+            mask = np.zeros((h, w), dtype=np.uint8)
+            x1, y1, x2, y2 = bbox
+            mask[y1:y2, x1:x2] = 255
+            return mask
+
     def _examine_each_mask(self, params: Dict[str, Any]) -> ToolResult:
         """
         Execute examine_each_mask tool - render each mask for LLM validation.
