@@ -262,7 +262,8 @@ class ToolExecutor:
 
         print(f"  Segmenting {len(detections)} detected objects with SAM3...")
 
-        masks = []
+        initial_mask_count = len(self.masks)
+
         for i, det in enumerate(detections):
             label = det['label']
             bbox = det['bbox']
@@ -271,52 +272,35 @@ class ToolExecutor:
             print(f"    [{i+1}/{len(detections)}] {label} at {bbox}...", end=" ")
 
             try:
-                mask_np = None
-
-                # Method 1: Use SAM3 TEXT PROMPT DIRECTLY (BEST quality!)
-                # This gives the nice segmentation like sam3.png
-                # Don't constrain to bbox - let SAM3 find the full object
+                # Use SAM3 TEXT PROMPT directly - same as segment_phrase (BEST quality!)
+                # This is what gives nice segmentation like sam3.png
                 label_variants = self._get_sam3_friendly_labels(label)
 
+                found_mask = False
                 for variant in label_variants:
-                    mask_np = self._segment_with_text_prompt_full(variant, bbox)
-                    if mask_np is not None and mask_np.any():
-                        print(f"(text:'{variant}') ", end="")
+                    # Call segment_phrase internally - this works great
+                    result = self._segment_phrase({"text_prompt": variant})
+
+                    if result.success and result.data.get("num_masks", 0) > 0:
+                        print(f"(text:'{variant}') ✓")
+                        found_mask = True
+                        # Masks are already added to self.masks by _segment_phrase
+                        # Update the category to match Qwen's label
+                        num_new = result.data.get("num_masks", 0)
+                        for m in self.masks[-num_new:]:
+                            m.category = label
                         break
 
-                # Method 2: If text prompt failed, try with bbox constraint
-                if mask_np is None or not mask_np.any():
-                    for variant in label_variants:
-                        mask_np = self._segment_with_text_and_bbox(variant, bbox)
-                        if mask_np is not None and mask_np.any():
-                            print(f"(text+bbox:'{variant}') ", end="")
-                            break
-
-                # Method 3: Use SAM3 box/point prompts as last resort
-                if mask_np is None or not mask_np.any():
-                    mask_np = self._segment_box_with_sam3(bbox)
-
-                if mask_np is not None and mask_np.any():
-                    mask_data = MaskData(
-                        mask_id=len(self.masks) + 1,
-                        mask=mask_np,
-                        bbox=bbox,
-                        category=label,
-                        score=confidence,
-                        text_prompt=label,
-                    )
-                    self.masks.append(mask_data)
-                    masks.append(mask_data)
-                    print("✓")
-                else:
-                    print("✗ (no mask)")
+                if not found_mask:
+                    print("✗ (no mask from SAM3)")
 
             except Exception as e:
                 print(f"✗ ({e})")
                 logger.error(f"Box segmentation failed for {label}: {e}")
 
-        print(f"  Total: {len(masks)} masks generated")
-        return masks
+        new_masks = self.masks[initial_mask_count:]
+        print(f"  Total: {len(new_masks)} masks generated")
+        return new_masks
 
     def _segment_with_text_prompt_full(self, label: str, bbox: List[int]) -> np.ndarray:
         """
