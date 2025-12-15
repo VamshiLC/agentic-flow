@@ -321,10 +321,10 @@ class InfrastructureDetectionAgentCore:
             # Road defects - Red shades
             'potholes': (255, 0, 0),
             'pothole': (255, 0, 0),
+            'cracks': (255, 100, 0),  # Orange for all cracks
             'alligator_cracks': (255, 50, 0),
             'longitudinal_cracks': (255, 100, 0),
             'transverse_cracks': (255, 150, 0),
-            'road_surface_damage': (200, 0, 0),
             # Social issues - Cyan/Purple
             'abandoned_vehicle': (128, 0, 128),
             'homeless_encampment': (0, 255, 255),
@@ -338,6 +338,7 @@ class InfrastructureDetectionAgentCore:
             'street_signs': (255, 200, 0),
             'traffic_lights': (0, 255, 100),
             'tyre_marks': (100, 100, 100),
+            'graffiti': (255, 0, 255),  # Magenta for graffiti
         }
 
         try:
@@ -513,9 +514,7 @@ class InfrastructureDetectionAgentCore:
         CATEGORIES = {
             "road_defects": [
                 ("potholes", "holes, depressions, or cavities in road pavement - dark circular or irregular shapes in the road"),
-                ("alligator_cracks", "web-like pattern of interconnected cracks resembling alligator skin on road surface"),
-                ("longitudinal_cracks", "long cracks running parallel to the road direction"),
-                ("transverse_cracks", "cracks running perpendicular/across the road"),
+                ("cracks", "any cracks in road pavement - longitudinal cracks, transverse cracks, alligator/web cracks, or any visible breaks in the road surface"),
             ],
             "social_issues": [
                 ("homeless_encampment", "tents, tarps, blue tarps, makeshift shelters, camping tents, fabric shelters, cardboard shelters on sidewalk or street - ANY tent or tarp structure"),
@@ -529,6 +528,7 @@ class InfrastructureDetectionAgentCore:
                 ("street_signs", "stop signs, speed limit signs, street name signs, warning signs, any road signage"),
                 ("traffic_lights", "traffic signal lights, red/yellow/green lights at intersections"),
                 ("tyre_marks", "black tire skid marks on road, rubber marks from vehicles"),
+                ("graffiti", "spray paint, tags, vandalism, painted text or images on walls, buildings, fences, or any surface"),
             ],
         }
 
