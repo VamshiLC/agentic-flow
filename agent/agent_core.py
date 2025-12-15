@@ -204,13 +204,16 @@ class InfrastructureDetectionAgentCore:
         detections_with_boxes = self._ask_qwen_to_detect_with_boxes(image)
 
         if not detections_with_boxes:
-            print("Qwen found no objects - trying fallback text prompt search...")
-            # Fallback to text prompt search
-            fallback_categories = [
-                "manhole", "pothole", "crack", "graffiti",
-                "abandoned vehicle", "debris", "street sign"
-            ]
-            return self._run_text_prompt_search(image, fallback_categories, tool_executor, start_time)
+            print("Qwen found no objects with bboxes.")
+            print("The model didn't identify any notable objects in this image.")
+            return AgentResult(
+                success=True,
+                detections=[],
+                num_detections=0,
+                final_image=image,
+                turns_taken=1,
+                message="No objects detected by visual analysis"
+            )
 
         # Filter by confidence threshold
         detections_with_boxes = [
@@ -579,37 +582,35 @@ IMPORTANT: Be STRICT. Only Accept if the mask clearly shows the claimed object t
         # Get image dimensions for coordinate validation
         width, height = image.size
 
-        # Use Qwen2.5-VL's native JSON grounding format
-        detection_prompt = f"""Detect all infrastructure issues in this road/street image.
+        # TRUE VISUAL INTELLIGENCE - Let the model SEE and DECIDE
+        detection_prompt = f"""You are a visual inspection AI. Look at this image and tell me what you see.
 
-Return results as a JSON array. For each object found, include:
-- "bbox_2d": [x1, y1, x2, y2] coordinates in pixels (image is {width}x{height})
-- "label": the object type
-- "confidence": detection confidence 0.0-1.0
+IMAGE SIZE: {width} x {height} pixels
 
-OBJECTS TO DETECT:
-1. pothole - Irregular holes/damage in road surface showing broken pavement
-2. manhole - Round or rectangular METAL covers (utility access, has patterns/text)
-3. crack - Linear fractures in pavement
-4. graffiti - Spray paint, tags on walls/surfaces
-5. debris - Trash, garbage on road
-6. street_sign - Traffic or road signs
-7. traffic_light - Signal lights
+YOUR TASK: Examine this image carefully and identify ANY objects, issues, or notable items you can see. This includes but is not limited to:
+- Road damage (potholes, cracks)
+- Infrastructure (manholes, signs, lights)
+- Vandalism or graffiti
+- Debris or trash
+- Any other notable objects
 
-IMPORTANT DISTINCTIONS:
-- MANHOLE: Metal cover, circular/rectangular, has pattern/grid/text, flush with road
-- POTHOLE: Irregular shape, shows broken/missing pavement, has depth
-- Do NOT detect shadows, wet spots, or normal road markings
+For each object you identify, provide:
+1. What it is (label)
+2. Where it is (bounding box coordinates)
+3. How confident you are (0.0-1.0)
 
-Return JSON array format:
+OUTPUT FORMAT - JSON array:
 ```json
 [
-  {{"bbox_2d": [x1, y1, x2, y2], "label": "manhole", "confidence": 0.95}},
-  {{"bbox_2d": [x1, y1, x2, y2], "label": "pothole", "confidence": 0.85}}
+  {{"bbox_2d": [x1, y1, x2, y2], "label": "what_you_see", "confidence": 0.9}}
 ]
 ```
 
-If nothing found, return: []"""
+Where x1,y1 is top-left corner and x2,y2 is bottom-right corner in pixels.
+
+IMPORTANT: Just describe what you actually SEE in the image. Don't make things up. If you see spray paint or text on a wall, report it. If you see a hole in the road, report it. Be specific about what you observe.
+
+What objects do you see in this image?"""
 
         try:
             result = self.qwen_detector.detect(image, detection_prompt)
