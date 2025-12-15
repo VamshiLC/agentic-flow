@@ -149,7 +149,11 @@ class InfrastructureDetectionAgentCore:
             'pothole': ['pothole', 'hole', 'pit'],
             'crack': ['crack', 'cracks', 'fracture'],
             'trash': ['trash', 'garbage', 'litter', 'debris'],
-            'tent': ['tent', 'encampment', 'camp', 'homeless'],
+            # Homeless-related synonyms - comprehensive matching
+            'tent': ['tent', 'encampment', 'camp', 'homeless', 'shelter', 'tarp'],
+            'homeless': ['homeless', 'homless', 'encampment', 'tent', 'person', 'sleeping', 'belongings'],
+            'encampment': ['encampment', 'camp', 'homeless', 'tent', 'belongings'],
+            'person': ['person', 'people', 'homeless', 'sleeping'],
             'graffiti': ['graffiti', 'grafiti', 'spray', 'tag', 'vandalism'],
             'manhole': ['manhole', 'drain', 'grate', 'cover'],
         }
@@ -748,38 +752,50 @@ IMPORTANT: Be STRICT. Only Accept if the mask clearly shows the claimed object t
         img_width, img_height = image.size
 
         # Use Qwen2.5-VL's grounding detection capability
-        grounding_prompt = f"""Analyze this street/road image and detect infrastructure PROBLEMS only.
+        grounding_prompt = f"""Analyze this street/road image and detect ALL infrastructure problems and issues.
 
-IMPORTANT: Only detect things that are ACTUAL PROBLEMS, not normal objects.
+CATEGORIES TO DETECT (find ALL that apply):
 
-CATEGORIES TO DETECT:
-- pothole: ONLY holes/depressions in road surface with visible damage
-- crack: ONLY visible cracks/fractures in pavement
-- manhole: Metal covers/grates on road (for inventory, not damage)
-- graffiti: Spray paint/tags/vandalism on walls/surfaces
-- trash: Garbage, litter, debris on street/sidewalk
-- tent/encampment: Homeless camps, tarps, sleeping bags on sidewalk
-- abandoned vehicle: ONLY vehicles that are CLEARLY abandoned - look for: broken windows, flat tires, rust, damage, covered in dirt/debris, missing parts. Do NOT include normal parked cars!
-- damaged sign: ONLY broken/bent/defaced signs, not normal signs
-- blocked sidewalk: Physical obstructions blocking pedestrian path
+1. ROAD DAMAGE:
+   - pothole: Holes, depressions, broken pavement in road surface
+   - crack: Visible cracks, fractures, splits in pavement
 
-CRITICAL RULES:
-1. Normal parked cars are NOT abandoned vehicles
-2. A vehicle is ABANDONED only if it shows clear signs: damage, flat tires, broken glass, rust, debris
-3. Only detect actual PROBLEMS, not normal infrastructure
+2. HOMELESS/ENCAMPMENTS (IMPORTANT - detect these!):
+   - homeless person: Any person sleeping, sitting, lying on sidewalk/street
+   - tent: Tents, tarps, makeshift shelters on sidewalk/street
+   - encampment: Homeless camps with belongings, blankets, cardboard, shopping carts
+   - sleeping bag: Sleeping bags, bedding on sidewalk
+   - belongings: Piles of personal belongings, bags, carts on sidewalk
+
+3. INFRASTRUCTURE:
+   - manhole: Metal covers/grates on road
+   - graffiti: Spray paint, tags, vandalism on walls/surfaces
+   - trash: Garbage, litter, debris on street/sidewalk
+   - illegal dumping: Large items dumped (furniture, mattresses, appliances)
+
+4. VEHICLES:
+   - abandoned vehicle: Vehicles with damage, flat tires, rust, broken windows, covered in debris
+
+5. OTHER:
+   - damaged sign: Broken, bent, or defaced signs
+   - blocked sidewalk: Obstructions blocking pedestrian path
+
+DETECTION RULES:
+- For homeless: Look for people on ground, tents, tarps, blankets, shopping carts, piles of belongings
+- For abandoned vehicles: Must show damage signs (NOT normal parked cars)
+- Detect EVERYTHING you see that matches these categories
 
 OUTPUT FORMAT - Return JSON array:
 [
   {{"label": "pothole", "bbox_2d": [x1, y1, x2, y2]}},
-  {{"label": "abandoned vehicle", "bbox_2d": [x1, y1, x2, y2]}}
+  {{"label": "tent", "bbox_2d": [x1, y1, x2, y2]}},
+  {{"label": "homeless person", "bbox_2d": [x1, y1, x2, y2]}}
 ]
 
 Coordinates: x1,y1 = top-left, x2,y2 = bottom-right in PIXELS.
 Image size: {img_width}x{img_height} pixels.
 
-If NO problems found, return: []
-
-Be STRICT - only real problems, not normal objects."""
+If NO problems found, return: []"""
 
         try:
             result = self.qwen_detector.detect(image, grounding_prompt)
