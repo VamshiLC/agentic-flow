@@ -332,6 +332,12 @@ def draw_category_detections(frame_rgb, detections, category):
 if __name__ == "__main__":
     import argparse
 
+    # Configure logging to see SAM3 debug messages
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
     parser = argparse.ArgumentParser(
         description="Multi-category detection: Qwen3 + SAM3 pipeline"
     )

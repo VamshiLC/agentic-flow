@@ -84,21 +84,28 @@ DETAILED_PROMPTS = {
         ]
     },
 
-    "road_surface_damage": {
-        "what": "General pavement deterioration, raveling, or surface distress",
+    "graffiti": {
+        "what": "Unauthorized spray paint, tags, or markings on public infrastructure",
         "visual_cues": [
-            "Loose aggregate or gravel on surface",
-            "Rough, deteriorated pavement texture",
-            "Surface raveling (aggregate loss)",
-            "Faded or worn surface appearance",
-            "Patchy areas with different surface quality"
+            "MUST have CLEAR, VISIBLE spray-painted text, symbols, or artwork",
+            "Letters, words, tags, or artistic designs painted on surfaces",
+            "Often bright colors (especially red, blue, black, white, yellow)",
+            "Applied to walls, barriers, signs, bridges, or overpasses",
+            "May include gang tags, street art, or vandalism markings",
+            "Distinct from official signage or road markings",
+            "IMPORTANT: Must be CLEARLY VISIBLE paint/spray on surface"
         ],
-        "location": "Road surfaces, especially high-traffic or aged areas",
+        "location": "Walls, bridges, underpasses, barriers, utility boxes, signs, buildings",
         "not_this": [
-            "Intentional textured pavement",
-            "Clean gravel roads",
-            "Temporary construction surfaces",
-            "Dirt or dust on otherwise intact pavement"
+            "⚠️ NEVER detect shadows, stains, or natural discoloration",
+            "⚠️ NEVER detect dirt, rust, or weathering",
+            "⚠️ NEVER detect official road markings or signage",
+            "⚠️ NEVER detect poster advertisements or stickers",
+            "Construction markings or utility paint",
+            "Faded paint on infrastructure (not graffiti)",
+            "Natural patterns or textures on walls",
+            "Reflections or lighting effects",
+            "CRITICAL: If it's not clearly painted text/art, DO NOT DETECT!"
         ]
     },
 
@@ -161,23 +168,30 @@ DETAILED_PROMPTS = {
     },
 
     "homeless_person": {
-        "what": "Person living on streets with visible indicators of homelessness",
+        "what": "ACTUAL PERSON visible with clear indicators of street homelessness",
         "visual_cues": [
-            "Person with sleeping bag, blankets, or bedding in public",
-            "Individual with shopping cart full of belongings",
-            "Person sleeping/lying on sidewalk or bench with possessions",
-            "Visible makeshift shelter or cardboard housing",
-            "Person panhandling with sign or cup",
-            "Individual with multiple bags/belongings in non-residential area"
+            "CRITICAL: Must have VISIBLE HUMAN PERSON + homelessness indicators:",
+            "MUST see actual person's body, head, or clear human form",
+            "Person lying/sleeping on ground with visible bedding/belongings",
+            "Individual with shopping cart FULL of possessions",
+            "Person with makeshift cardboard shelter actively present",
+            "Person panhandling with visible sign",
+            "Person sitting/sleeping on sidewalk with multiple bags",
+            "IMPORTANT: MUST see the ACTUAL PERSON - not just belongings!",
+            "ONLY detect if you can clearly identify a human being present"
         ],
-        "location": "Sidewalks, parks, under bridges, doorways, bus stops",
+        "location": "Sidewalks, parks, under bridges, doorways",
         "not_this": [
-            "Regular pedestrians walking",
-            "Shoppers with shopping bags",
-            "Workers or delivery people",
-            "Tourists with backpacks",
-            "People waiting at bus stops",
-            "Runners or cyclists resting"
+            "⚠️ NEVER detect empty areas, vegetation, or shadows",
+            "⚠️ NEVER detect belongings/objects without visible person",
+            "⚠️ NEVER detect fences, barriers, or construction materials",
+            "⚠️ NEVER detect trash, debris, or random items",
+            "⚠️ NEVER detect tents/shelters WITHOUT seeing the person",
+            "Regular pedestrians walking or standing",
+            "Shoppers, workers, or tourists",
+            "People at bus stops or waiting areas",
+            "Runners, cyclists, or people exercising",
+            "CRITICAL: If you can't clearly see a HUMAN PERSON, DO NOT DETECT!"
         ]
     },
 
@@ -305,22 +319,28 @@ DETAILED_PROMPTS = {
     },
 
     "tyre_marks": {
-        "what": "Tire tracks, skid marks, or rubber deposits on pavement",
+        "what": "DISTINCT tire skid marks or rubber deposits on pavement from hard braking/burnouts",
         "visual_cues": [
-            "Dark rubber streaks on road surface",
-            "Parallel lines showing tire tread pattern",
-            "Skid marks from braking (straight or curved)",
-            "Burnout marks (darker, concentrated)",
-            "May show acceleration or turning patterns",
-            "Black or dark brown marks on lighter pavement"
+            "CRITICAL: Must be CLEARLY VISIBLE black rubber streaks",
+            "MUST show parallel lines matching tire tread pattern",
+            "Dark black rubber deposits distinctly darker than pavement",
+            "Skid marks from hard braking showing curve or straight line",
+            "Burnout marks (very dark, concentrated rubber)",
+            "MUST be fresh and clearly visible - not faded or ambiguous",
+            "IMPORTANT: If not OBVIOUSLY tire marks, DO NOT detect"
         ],
-        "location": "Road surfaces, especially at turns, intersections, or accident sites",
+        "location": "Road surfaces at intersections, turns, or accident sites",
         "not_this": [
-            "Painted road markings",
-            "Oil or fluid stains",
-            "Shadows from vehicles or objects",
-            "Pavement cracks or joints",
-            "Dirt or mud tracks"
+            "⚠️ NEVER detect painted road markings or lines",
+            "⚠️ NEVER detect oil stains or fluid spills",
+            "⚠️ NEVER detect shadows from vehicles or trees",
+            "⚠️ NEVER detect pavement cracks, joints, or seams",
+            "⚠️ NEVER detect dirt, mud, or water tracks",
+            "⚠️ NEVER detect normal pavement discoloration",
+            "Faded or barely visible marks",
+            "Shadows or dark patches on road",
+            "Road texture or aggregate patterns",
+            "CRITICAL: Only detect if marks are CLEARLY from tires!"
         ]
     }
 }
@@ -380,26 +400,44 @@ Defect: abandoned_vehicle, Box: [200, 150, 900, 550], Confidence: 0.78
 
 If NO defects match the criteria: "No defects detected"
 
-🚨 CRITICAL ACCURACY RULES 🚨:
-✓ ONLY detect if you are HIGHLY CONFIDENT (>80%) it matches ALL the criteria
-✓ FALSE POSITIVES are EXTREMELY COSTLY - be conservative!
-✓ Read the "DO NOT CONFUSE WITH" section CAREFULLY before detecting
-✓ If something looks ambiguous or unclear, DO NOT DETECT IT
-✓ For sensitive categories (homeless_encampment, abandoned_vehicle, homeless_person):
-  - Require MULTIPLE clear visual indicators (not just one)
-  - NEVER detect based on vegetation, shadows, or unclear objects
-  - Err on the side of NOT detecting rather than false positive
-✓ Provide realistic confidence scores - don't inflate them
-✓ Double-check each detection against the negative examples
+🚨 CRITICAL ACCURACY RULES - READ CAREFULLY 🚨:
 
-ACCURACY CHECKLIST FOR EACH DETECTION:
-1. Does it match ALL the visual cues?
-2. Is it NOT in the "DO NOT CONFUSE WITH" list?
-3. Does the location make sense?
-4. Am I >80% confident?
-5. Have I checked for ambiguity?
+⚠️ FALSE POSITIVES ARE EXTREMELY COSTLY - BE VERY CONSERVATIVE! ⚠️
 
-If you answer NO to any question, DO NOT DETECT!
+✓ ONLY detect if you are ABSOLUTELY CERTAIN (>85%) it matches ALL criteria
+✓ Read the "DO NOT CONFUSE WITH" section CAREFULLY - these are common errors!
+✓ If ANYTHING looks ambiguous, unclear, or questionable → DO NOT DETECT!
+✓ It is MUCH BETTER to miss a detection than to create a false positive
+✓ For sensitive categories (homeless_person, homeless_encampment, abandoned_vehicle, tyre_marks):
+  - Require MULTIPLE (3+) clear visual indicators - not just one!
+  - NEVER detect based on shadows, vegetation, fences, or unclear objects
+  - MUST see the actual object clearly - not just assume it's there
+  - Err on the side of NOT detecting rather than guessing
+
+✓ Give realistic confidence scores - NEVER inflate them
+✓ Double-check EVERY detection against ALL the negative examples
+✓ Question yourself: "Could this be something else?" If yes → DO NOT DETECT!
+
+🚫 ABSOLUTE "NEVER DETECT" RULES:
+• Shadows, reflections, or lighting effects → NEVER homeless_person/encampment
+• Vegetation, weeds, or plants → NEVER homeless_encampment
+• Empty fenced areas or barriers → NEVER homeless_person/encampment
+• Regular parked cars → NEVER abandoned_vehicle
+• Road discoloration or shadows → NEVER tyre_marks
+• If you can't clearly identify the object → DO NOT DETECT ANY CATEGORY!
+
+MANDATORY ACCURACY CHECKLIST FOR EACH DETECTION:
+1. Does it match ALL (not just some) of the visual cues? YES/NO
+2. Is it explicitly NOT in the "DO NOT CONFUSE WITH" list? YES/NO
+3. Does the location make perfect sense for this category? YES/NO
+4. Am I >85% confident this is correct? YES/NO
+5. Have I eliminated ALL other possibilities? YES/NO
+6. Could this possibly be a shadow, vegetation, or normal object? NO required
+7. Would a human expert agree with this detection? YES/NO
+
+If you answer NO to questions 1-5, 7 OR YES to question 6 → DO NOT DETECT!
+
+WHEN IN DOUBT → DO NOT DETECT! Zero detections is better than false positives!
 
 Now carefully analyze this image:
 """

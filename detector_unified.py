@@ -20,7 +20,6 @@ INFRASTRUCTURE_CATEGORIES = {
     "alligator_cracks": "Web-like interconnected cracks resembling alligator skin",
     "longitudinal_cracks": "Cracks running parallel to the direction of traffic",
     "transverse_cracks": "Cracks running perpendicular to the direction of traffic",
-    "road_surface_damage": "General pavement deterioration or distress",
 
     # Homeless/social issues
     "abandoned_vehicle": "Vehicle clearly abandoned or with someone living inside",
@@ -32,6 +31,7 @@ INFRASTRUCTURE_CATEGORIES = {
     "damaged_paint": "Deteriorated or faded road markings",
     "damaged_crosswalks": "Faded or deteriorated crosswalk markings",
     "dumped_trash": "Debris or illegally dumped items",
+    "graffiti": "Unauthorized spray paint or tags on public infrastructure",
     "street_signs": "Traffic or regulatory signs",
     "traffic_lights": "Traffic signal lights and poles",
     "tyre_marks": "Tire or skid marks on pavement"
@@ -44,7 +44,6 @@ DEFECT_COLORS = {
     "alligator_cracks": (0, 200, 255),    # Orange
     "longitudinal_cracks": (0, 255, 0),   # Green
     "transverse_cracks": (255, 0, 0),     # Blue
-    "road_surface_damage": (255, 255, 0), # Cyan
     "abandoned_vehicle": (0, 0, 200),     # Dark red
     "homeless_encampment": (0, 165, 255), # Orange
     "homeless_person": (255, 0, 255),     # Magenta
@@ -52,6 +51,7 @@ DEFECT_COLORS = {
     "damaged_paint": (128, 0, 128),       # Purple
     "damaged_crosswalks": (255, 0, 255),  # Magenta
     "dumped_trash": (100, 100, 100),      # Dark gray
+    "graffiti": (255, 20, 147),           # Deep pink
     "street_signs": (255, 255, 0),        # Yellow
     "traffic_lights": (0, 255, 255),      # Yellow
     "tyre_marks": (200, 200, 200)         # Light gray

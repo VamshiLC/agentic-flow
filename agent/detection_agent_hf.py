@@ -409,7 +409,7 @@ class InfrastructureDetectionAgentHF:
         Returns:
             Best fitting mask or None
         """
-        if not masks or len(masks) == 0:
+        if masks is None or (hasattr(masks, '__len__') and len(masks) == 0):
             return None
 
         img_width, img_height = image_size
@@ -526,14 +526,40 @@ class InfrastructureDetectionAgentHF:
                 box_normalized = [center_x, center_y, width, height]
 
                 # Use geometric prompt (box-based segmentation)
-                self.sam3_processor.add_geometric_prompt(
+                logger.info(f"SAM3: Calling add_geometric_prompt with box={box_normalized}")
+                result = self.sam3_processor.add_geometric_prompt(
                     box=box_normalized,
                     label=True,  # True = positive prompt (include this region)
                     state=inference_state
                 )
 
-                # Retrieve results from state
-                masks = inference_state.get('masks', [])
+                # Debug: Check what was returned
+                logger.info(f"SAM3: add_geometric_prompt returned type={type(result)}, value={result if not isinstance(result, dict) else 'dict'}")
+                logger.info(f"SAM3: inference_state type={type(inference_state)}, keys={inference_state.keys() if isinstance(inference_state, dict) else 'not a dict'}")
+
+                # Try multiple ways to get masks
+                masks = None
+                if result is not None:
+                    # Option 1: Result is the masks directly
+                    if isinstance(result, (list, tuple)):
+                        masks = result
+                        logger.info(f"SAM3: Got masks from result (list/tuple), count={len(masks)}")
+                    # Option 2: Result is a dict with masks
+                    elif isinstance(result, dict) and 'masks' in result:
+                        masks = result['masks']
+                        logger.info(f"SAM3: Got masks from result dict, count={len(masks)}")
+                    # Option 3: Result has masks attribute
+                    elif hasattr(result, 'masks'):
+                        masks = result.masks
+                        logger.info(f"SAM3: Got masks from result.masks attribute")
+
+                # Option 4: Masks in inference_state
+                if masks is None and isinstance(inference_state, dict):
+                    masks = inference_state.get('masks', [])
+                    logger.info(f"SAM3: Got masks from inference_state, count={len(masks) if masks else 0}")
+
+                if masks is None or (hasattr(masks, '__len__') and len(masks) == 0):
+                    logger.error(f"SAM3: No masks found! result={result}, state_keys={inference_state.keys() if isinstance(inference_state, dict) else 'N/A'}")
 
             # FALLBACK: Use text prompt
             elif query is not None:
