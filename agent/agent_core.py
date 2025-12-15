@@ -576,43 +576,29 @@ Describe everything visible."""
             response = result.get("text", "").lower()
             print(f"Qwen says: {response}")
 
-            # Extract what Qwen found - map to SAM3-friendly search terms
+            # Extract what Qwen found - map to search terms
             found_items = []
-            # Format: 'keyword in qwen response' -> 'SAM3 search term'
             keywords = {
-                # Graffiti - use descriptive terms SAM3 understands
-                'graffiti': 'spray paint on wall',
-                'spray paint': 'spray paint on wall',
-                'spray-paint': 'spray paint on wall',
-                'painted wall': 'painted wall',
-                'writing on wall': 'text on wall',
-                'text on wall': 'text on wall',
-                'vandal': 'spray paint on wall',
-                'mural': 'painted wall',
-                'street art': 'painted wall',
+                # Graffiti
+                'graffiti': 'graffiti',
+                'spray paint': 'graffiti',
+                'vandal': 'graffiti',
+                'mural': 'graffiti',
                 # Road damage
-                'pothole': 'hole in road',
-                'hole in road': 'hole in road',
-                'road damage': 'damaged road',
-                'crack': 'crack in road',
-                'fracture': 'crack in road',
-                # Manholes - use what SAM3 can see
-                'manhole': 'round metal cover on road',
-                'metal cover': 'round metal cover on road',
-                'metal grate': 'metal grate',
-                'utility cover': 'round metal cover on road',
-                'sewer': 'round metal cover on road',
-                'drain': 'drain grate',
-                'grate': 'metal grate',
+                'pothole': 'pothole',
+                'hole': 'pothole',
+                'crack': 'crack',
+                # Manholes
+                'manhole': 'manhole',
+                'metal cover': 'manhole',
+                'grate': 'manhole',
+                'drain': 'manhole',
                 # Debris
-                'debris': 'trash on road',
-                'trash': 'trash on road',
-                'garbage': 'garbage on road',
-                'litter': 'litter on road',
+                'debris': 'debris',
+                'trash': 'trash',
+                'garbage': 'trash',
                 # Signs and lights
-                'sign': 'street sign',
-                'traffic sign': 'traffic sign',
-                'street sign': 'street sign',
+                'sign': 'sign',
                 'traffic light': 'traffic light',
                 'street light': 'street light',
             }
