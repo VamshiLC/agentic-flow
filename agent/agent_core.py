@@ -218,20 +218,28 @@ class InfrastructureDetectionAgentCore:
         result_image = image.copy()
         draw = ImageDraw.Draw(result_image)
 
-        # Colors for exact 12 categories from system_prompt.py
+        # Colors for CATEGORY_GROUPS
         colors = {
-            'pothole': (255, 0, 0),           # Red - Critical
-            'crack': (255, 100, 0),           # Orange-Red - Critical
-            'graffiti': (255, 0, 255),        # Magenta - Critical
-            'tent': (0, 255, 255),            # Cyan - High
-            'car': (0, 0, 255),               # Blue - High
-            'illegal dumping': (128, 0, 128), # Purple - High
-            'trash': (139, 69, 19),           # Brown - Medium
-            'blocked sidewalk': (255, 165, 0),# Orange - Medium
-            'manhole': (0, 255, 0),           # Green - Infrastructure
-            'damaged sign': (255, 255, 0),    # Yellow - Infrastructure
-            'damaged light': (255, 200, 0),   # Gold - Infrastructure
-            'damaged crosswalk': (200, 200, 255), # Light blue - Infrastructure
+            # Road defects - Red shades
+            'potholes': (255, 0, 0),
+            'pothole': (255, 0, 0),
+            'alligator_cracks': (255, 50, 0),
+            'longitudinal_cracks': (255, 100, 0),
+            'transverse_cracks': (255, 150, 0),
+            'road_surface_damage': (200, 0, 0),
+            # Social issues - Cyan/Purple
+            'abandoned_vehicle': (128, 0, 128),
+            'homeless_encampment': (0, 255, 255),
+            'homeless_person': (0, 200, 200),
+            # Infrastructure - Green/Yellow/Blue
+            'manholes': (0, 255, 0),
+            'manhole': (0, 255, 0),
+            'damaged_paint': (255, 255, 0),
+            'damaged_crosswalks': (200, 200, 255),
+            'dumped_trash': (139, 69, 19),
+            'street_signs': (255, 200, 0),
+            'traffic_lights': (0, 255, 100),
+            'tyre_marks': (100, 100, 100),
         }
 
         try:
@@ -276,39 +284,33 @@ class InfrastructureDetectionAgentCore:
         )
 
     def _ask_qwen_to_detect_with_boxes(self, image: Image.Image) -> List[Dict]:
-        """Ask Qwen to detect infrastructure issues with bounding boxes - SMART detection."""
+        """Ask Qwen to detect infrastructure issues with bounding boxes."""
         img_width, img_height = image.size
 
-        # Use exact categories from system_prompt.py
-        prompt = f"""<|im_start|>system
-You are an expert urban infrastructure inspector AI. Your job is to identify problems and objects in street images.
-<|im_end|>
-<|im_start|>user
-Analyze this image carefully. Find and locate ALL instances of these 12 categories:
+        # Qwen2.5-VL grounding prompt - be specific and use detection language
+        prompt = f"""You are an object detection model. Locate and draw bounding boxes around these objects in the image:
 
-1. pothole - Holes or depressions in road pavement
-2. crack - Cracks in road pavement or sidewalk
-3. graffiti - Spray paint, tags, vandalism on walls/surfaces
-4. tent - Tents, encampments, tarps, homeless shelters
-5. car - Vehicles (cars, trucks, vans) on or near road
-6. illegal dumping - Large items dumped on street (furniture, appliances)
-7. trash - Litter, garbage, debris on road/sidewalk
-8. blocked sidewalk - Objects blocking pedestrian path
-9. manhole - Manhole covers, utility covers on road
-10. damaged sign - Broken, bent, or defaced street signs
-11. damaged light - Broken street lights
-12. damaged crosswalk - Faded crosswalk markings
+1. potholes - holes in road
+2. alligator_cracks - web-like cracks in pavement
+3. longitudinal_cracks - long cracks along road
+4. transverse_cracks - cracks across road
+5. road_surface_damage - any road damage
+6. abandoned_vehicle - old/damaged cars
+7. homeless_encampment - tents, tarps, shelters
+8. homeless_person - people on street
+9. manholes - round metal covers on road
+10. damaged_paint - faded road markings
+11. damaged_crosswalks - faded crosswalk lines
+12. dumped_trash - garbage, debris
+13. street_signs - any road signs
+14. traffic_lights - signal lights
+15. tyre_marks - tire skid marks
 
-For EACH object you find, provide precise bounding box coordinates.
+Output ONLY a JSON array. For each object found, give exact pixel coordinates:
+[{{"label": "name", "bbox_2d": [x1, y1, x2, y2]}}]
 
-Output format - JSON array only:
-[{{"label": "category", "bbox_2d": [x1, y1, x2, y2]}}]
-
-Image size: {img_width}x{img_height}. All coordinates must be within bounds.
-Return [] if nothing found.
-<|im_end|>
-<|im_start|>assistant
-"""
+Image size is {img_width}x{img_height}. Be precise with coordinates.
+If empty image or no objects: []"""
 
         try:
             result = self.qwen_detector.detect(image, prompt)
