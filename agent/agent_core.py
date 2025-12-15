@@ -527,7 +527,6 @@ class InfrastructureDetectionAgentCore:
                 ("dumped_trash", "garbage bags, piles of trash, illegally dumped items, debris, litter piles, discarded furniture or appliances"),
                 ("street_signs", "stop signs, speed limit signs, street name signs, warning signs, any road signage"),
                 ("traffic_lights", "traffic signal lights, red/yellow/green lights at intersections"),
-                ("tyre_marks", "black tire skid marks on road, rubber marks from vehicles"),
                 ("graffiti", "spray paint, tags, vandalism, painted text or images on walls, buildings, fences, or any surface"),
             ],
         }
