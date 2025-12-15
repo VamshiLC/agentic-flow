@@ -271,11 +271,20 @@ class ToolExecutor:
             print(f"    [{i+1}/{len(detections)}] {label} at {bbox}...", end=" ")
 
             try:
-                # Method 1: Use SAM3 text prompt with label, then crop to bbox
-                mask_np = self._segment_with_text_and_crop(label, bbox)
+                mask_np = None
 
+                # Method 1: Use SAM3 TEXT PROMPT (BEST quality - semantic understanding)
+                # Try multiple label variations for better SAM3 text matching
+                label_variants = self._get_sam3_friendly_labels(label)
+
+                for variant in label_variants:
+                    mask_np = self._segment_with_text_and_bbox(variant, bbox)
+                    if mask_np is not None and mask_np.any():
+                        print(f"(text:'{variant}') ", end="")
+                        break
+
+                # Method 2: Use SAM3 box/point prompts if text failed
                 if mask_np is None or not mask_np.any():
-                    # Method 2: Fallback to point-based segmentation
                     mask_np = self._segment_box_with_sam3(bbox)
 
                 if mask_np is not None and mask_np.any():
@@ -299,6 +308,154 @@ class ToolExecutor:
 
         print(f"  Total: {len(masks)} masks generated")
         return masks
+
+    def _get_sam3_friendly_labels(self, label: str) -> List[str]:
+        """
+        Get SAM3-friendly label variants for better text prompt matching.
+
+        SAM3 works better with common object names. This maps our detection
+        categories to terms SAM3 understands well.
+
+        Args:
+            label: Original detection label
+
+        Returns:
+            List of label variants to try (in order of preference)
+        """
+        label_lower = label.lower().strip()
+
+        # Mapping from detection labels to SAM3-friendly terms
+        label_map = {
+            # Road damage
+            'pothole': ['pothole', 'hole in road', 'road damage'],
+            'crack': ['crack', 'road crack', 'pavement crack'],
+
+            # Homeless/encampments
+            'homeless person': ['person', 'human', 'people'],
+            'homeless': ['person', 'human', 'tent'],
+            'tent': ['tent', 'camping tent', 'shelter'],
+            'encampment': ['tent', 'tarp', 'shelter'],
+            'sleeping bag': ['sleeping bag', 'blanket', 'bedding'],
+            'belongings': ['bags', 'luggage', 'belongings'],
+
+            # Infrastructure
+            'manhole': ['manhole cover', 'manhole', 'metal cover', 'drain cover'],
+            'graffiti': ['graffiti', 'spray paint', 'wall art', 'paint'],
+            'trash': ['trash', 'garbage', 'litter', 'debris'],
+            'illegal dumping': ['furniture', 'mattress', 'debris pile'],
+
+            # Vehicles
+            'abandoned vehicle': ['car', 'vehicle', 'automobile'],
+            'car': ['car', 'vehicle', 'automobile'],
+            'vehicle': ['car', 'vehicle', 'automobile'],
+
+            # Other
+            'damaged sign': ['sign', 'street sign', 'road sign'],
+            'blocked sidewalk': ['obstruction', 'barrier', 'blockage'],
+        }
+
+        # Get variants or use original label
+        if label_lower in label_map:
+            return label_map[label_lower]
+
+        # Check partial matches
+        for key, variants in label_map.items():
+            if key in label_lower or label_lower in key:
+                return variants
+
+        # Return original label as fallback
+        return [label]
+
+    def _segment_with_text_and_bbox(self, label: str, bbox: List[int]) -> np.ndarray:
+        """
+        Use SAM3 text prompt to segment, then select the best mask overlapping with bbox.
+
+        This is the BEST quality method because:
+        1. SAM3 uses semantic understanding of the label
+        2. We pick the mask that best fits the bbox from Qwen
+        3. Result is a proper segmentation, not a rectangle
+
+        Args:
+            label: Object type (SAM3-friendly term)
+            bbox: [x1, y1, x2, y2] bounding box from Qwen
+
+        Returns:
+            numpy array mask or None if failed
+        """
+        try:
+            x1, y1, x2, y2 = bbox
+            h, w = self.original_image.size[1], self.original_image.size[0]
+
+            # Call SAM3 text prompt
+            output = self.sam3_processor.set_text_prompt(
+                state=self.inference_state,
+                prompt=label
+            )
+
+            if not output:
+                return None
+
+            # Get all masks from output
+            raw_masks = []
+            scores = []
+
+            if isinstance(output, dict):
+                raw_masks = output.get('masks', [])
+                scores = output.get('scores', [])
+            elif hasattr(output, 'masks'):
+                raw_masks = output.masks
+                scores = getattr(output, 'scores', [])
+
+            if not raw_masks:
+                return None
+
+            # Find the mask with BEST overlap with bbox
+            best_mask = None
+            best_score = 0
+
+            for i, mask in enumerate(raw_masks):
+                # Convert to numpy
+                if hasattr(mask, 'cpu'):
+                    mask_np = mask.cpu().numpy()
+                else:
+                    mask_np = np.array(mask)
+
+                if mask_np.ndim > 2:
+                    mask_np = mask_np.squeeze()
+
+                # Calculate overlap with bbox
+                bbox_mask = (mask_np[y1:y2, x1:x2] > 0.5)
+                overlap_pixels = np.sum(bbox_mask)
+
+                # Calculate IoU-like score
+                total_mask_pixels = np.sum(mask_np > 0.5)
+                bbox_area = (y2 - y1) * (x2 - x1)
+
+                if total_mask_pixels > 0 and overlap_pixels > 0:
+                    # Score: overlap / max(mask_size, bbox_size)
+                    # This favors masks that fit well within the bbox
+                    score = overlap_pixels / max(total_mask_pixels, bbox_area)
+
+                    # Bonus if SAM3 gave high confidence
+                    if scores and i < len(scores):
+                        sam_score = scores[i].item() if hasattr(scores[i], 'item') else scores[i]
+                        score *= (1 + sam_score)
+
+                    if score > best_score:
+                        best_score = score
+                        best_mask = mask_np
+
+            if best_mask is not None and best_score > 0.01:  # Minimum threshold
+                # Keep full mask but ensure it overlaps with bbox
+                # Don't crop to bbox - keep SAM3's natural segmentation
+                final_mask = (best_mask > 0.5).astype(np.uint8) * 255
+                return final_mask
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"Text+bbox segmentation failed for '{label}': {e}")
+            return None
 
     def _segment_with_text_and_crop(self, label: str, bbox: List[int]) -> np.ndarray:
         """
@@ -376,7 +533,10 @@ class ToolExecutor:
         """
         Use SAM3 to segment a specific bounding box region.
 
-        Strategy: Use text prompt for the region, or multi-point prompting.
+        Strategy (in order of quality):
+        1. SAM3 box prompt - best for box-guided segmentation
+        2. SAM3 multi-point prompt - uses center + corner points
+        3. Rectangular fallback - last resort
 
         Args:
             bbox: [x1, y1, x2, y2] bounding box coordinates
@@ -388,52 +548,89 @@ class ToolExecutor:
             x1, y1, x2, y2 = bbox
             h, w = self.original_image.size[1], self.original_image.size[0]
 
-            # Method 1: Use multiple point prompts (center + corners)
-            # This gives SAM3 better spatial understanding
-            center_x = (x1 + x2) // 2
-            center_y = (y1 + y2) // 2
-
-            # Add padding to avoid edge issues
-            pad = 5
-            points = [
-                [center_x, center_y],  # Center (most important)
-            ]
-            labels = [1]  # All foreground
-
-            # Try multi-point prompting
+            # Method 1: Try SAM3 box prompt (BEST for box-guided segmentation)
             try:
+                # SAM3 box prompt expects [[x1, y1, x2, y2]]
+                box_input = [[x1, y1, x2, y2]]
+
+                if hasattr(self.sam3_processor, 'set_box_prompt'):
+                    output = self.sam3_processor.set_box_prompt(
+                        state=self.inference_state,
+                        box=box_input
+                    )
+                elif hasattr(self.sam3_processor, 'set_boxes_prompt'):
+                    output = self.sam3_processor.set_boxes_prompt(
+                        state=self.inference_state,
+                        boxes=box_input
+                    )
+                else:
+                    output = None
+
+                if output:
+                    mask = self._extract_best_mask_from_output(output, bbox)
+                    if mask is not None:
+                        print("(box prompt) ", end="")
+                        return mask
+
+            except Exception as e:
+                logger.debug(f"Box prompt failed: {e}")
+
+            # Method 2: Use multiple point prompts (center + corners for better coverage)
+            try:
+                center_x = (x1 + x2) // 2
+                center_y = (y1 + y2) // 2
+
+                # Use 5 points: center + 4 corners (inset slightly)
+                inset_x = int((x2 - x1) * 0.2)
+                inset_y = int((y2 - y1) * 0.2)
+
+                points = [
+                    [center_x, center_y],  # Center
+                    [x1 + inset_x, y1 + inset_y],  # Top-left
+                    [x2 - inset_x, y1 + inset_y],  # Top-right
+                    [x1 + inset_x, y2 - inset_y],  # Bottom-left
+                    [x2 - inset_x, y2 - inset_y],  # Bottom-right
+                ]
+                labels = [1, 1, 1, 1, 1]  # All foreground
+
                 output = self.sam3_processor.set_point_prompt(
                     state=self.inference_state,
                     point=points,
                     labels=labels
                 )
 
-                if output and len(output) > 0:
-                    # Get the mask array
-                    if isinstance(output, dict):
-                        mask = output.get('masks', [None])[0] if 'masks' in output else output.get('mask')
-                    elif isinstance(output, list) and len(output) > 0:
-                        mask = output[0].get('mask') if isinstance(output[0], dict) else output[0]
-                    else:
-                        mask = None
-
+                if output:
+                    mask = self._extract_best_mask_from_output(output, bbox)
                     if mask is not None:
-                        # Convert to numpy if needed
-                        if hasattr(mask, 'cpu'):
-                            mask = mask.cpu().numpy()
-                        if mask.ndim > 2:
-                            mask = mask.squeeze()
-
-                        # Crop mask to bbox region (only keep mask within bbox)
-                        cropped_mask = np.zeros_like(mask, dtype=np.uint8)
-                        cropped_mask[y1:y2, x1:x2] = (mask[y1:y2, x1:x2] > 0.5).astype(np.uint8) * 255
-                        return cropped_mask
+                        print("(point prompt) ", end="")
+                        return mask
 
             except Exception as e:
-                logger.debug(f"Point prompt failed: {e}")
+                logger.debug(f"Multi-point prompt failed: {e}")
 
-            # Method 2: Create rectangular mask from bbox (fallback)
+            # Method 3: Single center point (simpler fallback)
+            try:
+                center_x = (x1 + x2) // 2
+                center_y = (y1 + y2) // 2
+
+                output = self.sam3_processor.set_point_prompt(
+                    state=self.inference_state,
+                    point=[[center_x, center_y]],
+                    labels=[1]
+                )
+
+                if output:
+                    mask = self._extract_best_mask_from_output(output, bbox)
+                    if mask is not None:
+                        print("(center point) ", end="")
+                        return mask
+
+            except Exception as e:
+                logger.debug(f"Center point prompt failed: {e}")
+
+            # Method 4: Rectangular mask (LAST RESORT)
             logger.debug(f"Using rectangular bbox mask as fallback")
+            print("(rect fallback) ", end="")
             mask = np.zeros((h, w), dtype=np.uint8)
             mask[y1:y2, x1:x2] = 255
             return mask
@@ -446,6 +643,92 @@ class ToolExecutor:
             x1, y1, x2, y2 = bbox
             mask[y1:y2, x1:x2] = 255
             return mask
+
+    def _extract_best_mask_from_output(self, output, bbox: List[int]) -> np.ndarray:
+        """
+        Extract the best mask from SAM3 output that overlaps with bbox.
+
+        Args:
+            output: SAM3 output (dict or object)
+            bbox: [x1, y1, x2, y2] target bounding box
+
+        Returns:
+            numpy array mask cropped to bbox, or None
+        """
+        x1, y1, x2, y2 = bbox
+        h, w = self.original_image.size[1], self.original_image.size[0]
+
+        try:
+            # Extract masks from output
+            if isinstance(output, dict):
+                masks = output.get('masks', [])
+                if not masks and 'mask' in output:
+                    masks = [output['mask']]
+            elif hasattr(output, 'masks'):
+                masks = output.masks
+            elif isinstance(output, list):
+                masks = output
+            else:
+                masks = [output]
+
+            if not masks:
+                return None
+
+            # Find mask with best overlap with bbox
+            best_mask = None
+            best_score = 0
+
+            for mask in masks:
+                # Convert to numpy
+                if hasattr(mask, 'cpu'):
+                    mask_np = mask.cpu().numpy()
+                elif hasattr(mask, 'numpy'):
+                    mask_np = mask.numpy()
+                else:
+                    mask_np = np.array(mask)
+
+                if mask_np.ndim > 2:
+                    mask_np = mask_np.squeeze()
+
+                # Ensure correct shape
+                if mask_np.shape[0] != h or mask_np.shape[1] != w:
+                    continue
+
+                # Calculate overlap score with bbox
+                bbox_region = (mask_np[y1:y2, x1:x2] > 0.5).sum()
+                total_mask = (mask_np > 0.5).sum()
+
+                # Prefer masks that are mostly inside the bbox
+                if total_mask > 0:
+                    overlap_ratio = bbox_region / total_mask
+                    score = bbox_region * overlap_ratio  # Favor high overlap
+
+                    if score > best_score:
+                        best_score = score
+                        best_mask = mask_np
+
+            if best_mask is not None and best_score > 0:
+                # Create final mask cropped to bbox
+                final_mask = np.zeros((h, w), dtype=np.uint8)
+                final_mask[y1:y2, x1:x2] = (best_mask[y1:y2, x1:x2] > 0.5).astype(np.uint8) * 255
+
+                # Check if mask has reasonable coverage
+                mask_pixels = (final_mask > 0).sum()
+                bbox_pixels = (y2 - y1) * (x2 - x1)
+                coverage = mask_pixels / bbox_pixels if bbox_pixels > 0 else 0
+
+                # If coverage is too low, might be bad segmentation
+                if coverage < 0.05:
+                    logger.debug(f"Mask coverage too low: {coverage:.2%}")
+                    return None
+
+                return final_mask
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"Failed to extract mask from output: {e}")
+            return None
 
     def _examine_each_mask(self, params: Dict[str, Any]) -> ToolResult:
         """
