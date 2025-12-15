@@ -16,11 +16,33 @@ from detector_unified import UnifiedInfrastructureDetector, DEFECT_COLORS
 
 
 def draw_detections_with_masks(image_array, detections):
-    """Draw bounding boxes and colored segmentation masks on image."""
-    annotated = image_array.copy()
+    """
+    Draw professional-looking bounding boxes and segmentation masks on image.
 
-    # Create overlay for masks
-    mask_overlay = annotated.copy()
+    Features:
+    - Adaptive sizing based on image dimensions
+    - Vibrant, distinct colors for each defect type
+    - Semi-transparent mask overlays with visible contours
+    - Clean text labels with readable backgrounds
+    - Professional appearance suitable for reports/presentations
+    """
+    annotated = image_array.copy()
+    height, width = image_array.shape[:2]
+
+    # Adaptive sizing based on image dimensions
+    # Scale factors relative to a 1920x1080 reference
+    scale = min(width / 1920, height / 1080)
+    scale = max(0.5, min(scale, 2.0))  # Clamp between 0.5x and 2x
+
+    # Calculate adaptive parameters
+    bbox_thickness = max(2, int(4 * scale))
+    contour_thickness = max(2, int(3 * scale))
+    font_scale = max(0.5, 0.8 * scale)
+    font_thickness = max(1, int(2 * scale))
+    text_padding = max(5, int(8 * scale))
+
+    # Create overlay for semi-transparent masks
+    mask_overlay = np.zeros_like(annotated)
 
     for idx, det in enumerate(detections):
         label = det.get('label', 'unknown')
@@ -31,10 +53,9 @@ def draw_detections_with_masks(image_array, detections):
 
         if len(bbox) == 4:
             x1, y1, x2, y2 = map(int, bbox)
-            color = det.get('color', (0, 255, 0))
 
-            # Convert BGR to RGB for display
-            color_rgb = (color[2], color[1], color[0])
+            # Get color (already in BGR format from DEFECT_COLORS)
+            color_bgr = det.get('color', (0, 255, 0))
 
             # Draw segmentation mask if available
             if has_mask and mask is not None:
@@ -50,56 +71,77 @@ def draw_detections_with_masks(image_array, detections):
                         mask_array = mask_array.squeeze()
 
                     # Resize mask to image size if needed
-                    if mask_array.shape != (image_array.shape[0], image_array.shape[1]):
-                        mask_array = cv2.resize(mask_array,
-                                              (image_array.shape[1], image_array.shape[0]),
+                    if mask_array.shape != (height, width):
+                        mask_array = cv2.resize(mask_array, (width, height),
                                               interpolation=cv2.INTER_NEAREST)
 
-                    # Create colored mask overlay
-                    colored_mask = np.zeros_like(annotated)
-                    colored_mask[mask_array > 0] = color_rgb
+                    # Create colored mask overlay (semi-transparent)
+                    mask_overlay[mask_array > 0] = color_bgr
 
-                    # Blend with original image (30% transparency)
-                    mask_overlay = cv2.addWeighted(mask_overlay, 1.0, colored_mask, 0.3, 0)
+                    # Draw mask contour for better visibility
+                    contours, _ = cv2.findContours(mask_array, cv2.RETR_EXTERNAL,
+                                                   cv2.CHAIN_APPROX_SIMPLE)
+                    cv2.drawContours(annotated, contours, -1, color_bgr, contour_thickness)
 
-                    # Draw mask contour
-                    contours, _ = cv2.findContours(mask_array, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                    cv2.drawContours(annotated, contours, -1, color_rgb, 2)
-
-                    print(f"  [{idx+1}] {label}: confidence={confidence:.3f}, bbox={bbox}, ✓ MASK RENDERED")
+                    print(f"  [{idx+1}] {label}: {confidence:.1%} | bbox={bbox} | ✓ SEGMENTED")
 
                 except Exception as e:
-                    print(f"  [{idx+1}] {label}: confidence={confidence:.3f}, bbox={bbox}, ✗ MASK ERROR: {e}")
+                    print(f"  [{idx+1}] {label}: {confidence:.1%} | bbox={bbox} | ✗ MASK ERROR: {e}")
                     has_mask = False
             else:
-                print(f"  [{idx+1}] {label}: confidence={confidence:.3f}, bbox={bbox}, ✗ NO MASK")
+                print(f"  [{idx+1}] {label}: {confidence:.1%} | bbox={bbox}")
 
-            # Draw bbox
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), color_rgb, 3)
+            # Draw bounding box with adaptive thickness
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), color_bgr, bbox_thickness)
 
-            # Draw label with confidence and mask status
-            mask_status = "✓MASK" if has_mask else "✗NO-MASK"
-            text = f"{label} {confidence:.2f} {mask_status}"
+            # Prepare label text (cleaner format)
+            label_display = label.replace('_', ' ').title()
+            text = f"{label_display} {confidence:.0%}"
 
-            # Background for text
-            (text_w, text_h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-            cv2.rectangle(annotated, (x1, y1 - text_h - 15), (x1 + text_w + 10, y1), color_rgb, -1)
+            # Calculate text size for background
+            (text_w, text_h), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX,
+                                                         font_scale, font_thickness)
 
-            # Text
-            cv2.putText(
-                annotated,
-                text,
-                (x1 + 5, y1 - 5),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (255, 255, 255),
-                2
-            )
+            # Position label background (above bbox, or below if too close to top)
+            label_y_top = y1 - text_h - text_padding * 2 - baseline
+            if label_y_top < 10:
+                # Place below bbox if too close to top
+                label_y_top = y2 + baseline
+                label_y_bottom = label_y_top + text_h + text_padding * 2
+                text_y = label_y_top + text_h + text_padding
+            else:
+                label_y_bottom = y1
+                text_y = y1 - text_padding - baseline
 
-    # Blend mask overlay with annotated image
-    final = cv2.addWeighted(annotated, 0.7, mask_overlay, 0.3, 0)
+            # Draw semi-transparent label background
+            overlay = annotated.copy()
+            cv2.rectangle(overlay,
+                         (x1, label_y_top),
+                         (x1 + text_w + text_padding * 2, label_y_bottom),
+                         color_bgr, -1)
+            cv2.addWeighted(overlay, 0.7, annotated, 0.3, 0, annotated)
 
-    return final
+            # Draw text border for better readability
+            cv2.putText(annotated, text,
+                       (x1 + text_padding, text_y),
+                       cv2.FONT_HERSHEY_SIMPLEX,
+                       font_scale,
+                       (0, 0, 0),  # Black border
+                       font_thickness + 1)
+
+            # Draw main text (white)
+            cv2.putText(annotated, text,
+                       (x1 + text_padding, text_y),
+                       cv2.FONT_HERSHEY_SIMPLEX,
+                       font_scale,
+                       (255, 255, 255),
+                       font_thickness)
+
+    # Blend mask overlay with annotated image (40% mask opacity)
+    if np.any(mask_overlay):
+        annotated = cv2.addWeighted(annotated, 1.0, mask_overlay, 0.4, 0)
+
+    return annotated
 
 
 def main():

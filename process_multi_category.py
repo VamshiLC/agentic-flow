@@ -249,14 +249,31 @@ def process_video_multi_detection(
 
 
 def draw_category_detections(frame_rgb, detections, category):
-    """Draw detections with colored segmentation masks for a specific category on frame."""
-    frame = frame_rgb.copy()
-    color_bgr = DEFECT_COLORS.get(category, (0, 255, 0))
-    # Convert BGR to RGB for drawing
-    color_rgb = (color_bgr[2], color_bgr[1], color_bgr[0])
+    """
+    Draw professional detections with segmentation masks for a specific category.
 
-    # Create mask overlay
-    mask_overlay = frame.copy()
+    Features:
+    - Adaptive sizing based on frame dimensions
+    - Vibrant, distinct colors from DEFECT_COLORS
+    - Semi-transparent mask overlays with visible contours
+    - Clean text labels with readable backgrounds
+    """
+    frame = frame_rgb.copy()
+    height, width = frame.shape[:2]
+    color_bgr = DEFECT_COLORS.get(category, (0, 255, 0))
+
+    # Adaptive sizing
+    scale = min(width / 1920, height / 1080)
+    scale = max(0.5, min(scale, 2.0))
+
+    bbox_thickness = max(2, int(4 * scale))
+    contour_thickness = max(2, int(3 * scale))
+    font_scale = max(0.5, 0.8 * scale)
+    font_thickness = max(1, int(2 * scale))
+    text_padding = max(5, int(8 * scale))
+
+    # Create overlay for semi-transparent masks
+    mask_overlay = np.zeros_like(frame)
 
     for det in detections:
         bbox = det.get('bbox', [])
@@ -277,21 +294,17 @@ def draw_category_detections(frame_rgb, detections, category):
                     mask_array = mask_array.squeeze()
 
                 # Resize mask to frame size if needed
-                if mask_array.shape != (frame.shape[0], frame.shape[1]):
-                    mask_array = cv2.resize(mask_array,
-                                          (frame.shape[1], frame.shape[0]),
+                if mask_array.shape != (height, width):
+                    mask_array = cv2.resize(mask_array, (width, height),
                                           interpolation=cv2.INTER_NEAREST)
 
-                # Create colored mask
-                colored_mask = np.zeros_like(frame)
-                colored_mask[mask_array > 0] = color_rgb
+                # Create colored mask overlay
+                mask_overlay[mask_array > 0] = color_bgr
 
-                # Blend with overlay (30% transparency)
-                mask_overlay = cv2.addWeighted(mask_overlay, 1.0, colored_mask, 0.3, 0)
-
-                # Draw mask contour
-                contours, _ = cv2.findContours(mask_array, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                cv2.drawContours(frame, contours, -1, color_rgb, 2)
+                # Draw mask contour for better visibility
+                contours, _ = cv2.findContours(mask_array, cv2.RETR_EXTERNAL,
+                                               cv2.CHAIN_APPROX_SIMPLE)
+                cv2.drawContours(frame, contours, -1, color_bgr, contour_thickness)
 
             except Exception as e:
                 logger.warning(f"Failed to render mask for {category}: {e}")
@@ -299,34 +312,51 @@ def draw_category_detections(frame_rgb, detections, category):
         if len(bbox) == 4:
             x1, y1, x2, y2 = map(int, bbox)
 
-            # Draw box
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color_rgb, 3)
+            # Draw bounding box with adaptive thickness
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color_bgr, bbox_thickness)
 
-            # Draw label with confidence and mask status
+            # Prepare label text
             label = det.get('label', 'unknown')
             conf = det.get('confidence', 0.0)
-            mask_status = "✓M" if has_mask else ""
-            text = f"{label} {conf:.2f} {mask_status}"
+            label_display = label.replace('_', ' ').title()
+            text = f"{label_display} {conf:.0%}"
 
-            # Background for text
-            (text_w, text_h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-            cv2.rectangle(frame, (x1, y1 - text_h - 10), (x1 + text_w, y1), color_rgb, -1)
+            # Calculate text size
+            (text_w, text_h), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX,
+                                                         font_scale, font_thickness)
 
-            # Text
-            cv2.putText(
-                frame,
-                text,
-                (x1, y1 - 5),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 255, 255),
-                2
-            )
+            # Position label background
+            label_y_top = y1 - text_h - text_padding * 2 - baseline
+            if label_y_top < 10:
+                label_y_top = y2 + baseline
+                label_y_bottom = label_y_top + text_h + text_padding * 2
+                text_y = label_y_top + text_h + text_padding
+            else:
+                label_y_bottom = y1
+                text_y = y1 - text_padding - baseline
 
-    # Blend mask overlay with frame
-    final = cv2.addWeighted(frame, 0.7, mask_overlay, 0.3, 0)
+            # Draw semi-transparent label background
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (x1, label_y_top),
+                         (x1 + text_w + text_padding * 2, label_y_bottom),
+                         color_bgr, -1)
+            cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
 
-    return final
+            # Draw text border for better readability
+            cv2.putText(frame, text, (x1 + text_padding, text_y),
+                       cv2.FONT_HERSHEY_SIMPLEX, font_scale,
+                       (0, 0, 0), font_thickness + 1)
+
+            # Draw main text (white)
+            cv2.putText(frame, text, (x1 + text_padding, text_y),
+                       cv2.FONT_HERSHEY_SIMPLEX, font_scale,
+                       (255, 255, 255), font_thickness)
+
+    # Blend mask overlay with frame (40% mask opacity)
+    if np.any(mask_overlay):
+        frame = cv2.addWeighted(frame, 1.0, mask_overlay, 0.4, 0)
+
+    return frame
 
 
 if __name__ == "__main__":

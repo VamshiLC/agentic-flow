@@ -232,31 +232,75 @@ def process_video_by_category(
 
 
 def draw_detections_simple(frame_rgb, detections):
-    """Draw bounding boxes on frame."""
+    """
+    Draw professional-looking bounding boxes with adaptive sizing.
+
+    Features:
+    - Adaptive sizing based on frame dimensions
+    - Vibrant colors using DEFECT_COLORS palette
+    - Clean text labels with readable backgrounds
+    """
     import cv2
     import numpy as np
+    from detector_unified import DEFECT_COLORS
 
     frame = frame_rgb.copy()
+    height, width = frame.shape[:2]
+
+    # Adaptive sizing
+    scale = min(width / 1920, height / 1080)
+    scale = max(0.5, min(scale, 2.0))
+
+    bbox_thickness = max(2, int(4 * scale))
+    font_scale = max(0.5, 0.8 * scale)
+    font_thickness = max(1, int(2 * scale))
+    text_padding = max(5, int(8 * scale))
 
     for det in detections:
         bbox = det.get('bbox', [])
         if len(bbox) == 4:
             x1, y1, x2, y2 = map(int, bbox)
             label = det.get('label', 'unknown')
+            confidence = det.get('confidence', 0.0)
 
-            # Draw box
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            # Get color from palette
+            color_bgr = det.get('color', DEFECT_COLORS.get(label, (0, 255, 0)))
 
-            # Draw label
-            cv2.putText(
-                frame,
-                label,
-                (x1, y1 - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (0, 255, 0),
-                2
-            )
+            # Draw bounding box
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color_bgr, bbox_thickness)
+
+            # Prepare label text
+            label_display = label.replace('_', ' ').title()
+            text = f"{label_display} {confidence:.0%}"
+
+            # Calculate text size
+            (text_w, text_h), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX,
+                                                         font_scale, font_thickness)
+
+            # Position label
+            label_y_top = y1 - text_h - text_padding * 2 - baseline
+            if label_y_top < 10:
+                label_y_top = y2 + baseline
+                label_y_bottom = label_y_top + text_h + text_padding * 2
+                text_y = label_y_top + text_h + text_padding
+            else:
+                label_y_bottom = y1
+                text_y = y1 - text_padding - baseline
+
+            # Draw semi-transparent background
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (x1, label_y_top),
+                         (x1 + text_w + text_padding * 2, label_y_bottom),
+                         color_bgr, -1)
+            cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+
+            # Draw text with border
+            cv2.putText(frame, text, (x1 + text_padding, text_y),
+                       cv2.FONT_HERSHEY_SIMPLEX, font_scale,
+                       (0, 0, 0), font_thickness + 1)
+            cv2.putText(frame, text, (x1 + text_padding, text_y),
+                       cv2.FONT_HERSHEY_SIMPLEX, font_scale,
+                       (255, 255, 255), font_thickness)
 
     return frame
 

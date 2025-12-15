@@ -38,23 +38,25 @@ INFRASTRUCTURE_CATEGORIES = {
 }
 
 
-# Color mapping (BGR for OpenCV)
+# Professional color mapping (BGR format for OpenCV)
+# Each category has a distinct, vibrant color for easy identification
 DEFECT_COLORS = {
-    "potholes": (0, 0, 255),              # Red
-    "alligator_cracks": (0, 200, 255),    # Orange
-    "longitudinal_cracks": (0, 255, 0),   # Green
-    "transverse_cracks": (255, 0, 0),     # Blue
-    "abandoned_vehicle": (0, 0, 200),     # Dark red
-    "homeless_encampment": (0, 165, 255), # Orange
-    "homeless_person": (255, 0, 255),     # Magenta
-    "manholes": (128, 128, 128),          # Gray
-    "damaged_paint": (128, 0, 128),       # Purple
-    "damaged_crosswalks": (255, 0, 255),  # Magenta
-    "dumped_trash": (100, 100, 100),      # Dark gray
-    "graffiti": (255, 20, 147),           # Deep pink
-    "street_signs": (255, 255, 0),        # Yellow
-    "traffic_lights": (0, 255, 255),      # Yellow
-    "tyre_marks": (200, 200, 200)         # Light gray
+    "potholes": (0, 0, 255),                    # Bright Red
+    "alligator_cracks": (0, 140, 255),          # Dark Orange
+    "longitudinal_cracks": (0, 215, 255),       # Gold
+    "transverse_cracks": (0, 255, 255),         # Yellow
+    "road_surface_damage": (80, 127, 255),      # Coral
+    "abandoned_vehicle": (255, 100, 0),         # Deep Blue
+    "homeless_encampment": (255, 0, 180),       # Purple-Pink
+    "homeless_person": (255, 105, 180),         # Hot Pink
+    "manholes": (255, 255, 0),                  # Cyan
+    "damaged_paint": (255, 0, 255),             # Magenta
+    "damaged_crosswalks": (203, 192, 255),      # Pink
+    "dumped_trash": (42, 105, 165),             # Brown
+    "graffiti": (0, 255, 128),                  # Spring Green
+    "street_signs": (0, 215, 255),              # Gold (distinct from yellow)
+    "traffic_lights": (200, 255, 0),            # Lime Green
+    "tyre_marks": (255, 200, 150)               # Light Blue
 }
 
 
