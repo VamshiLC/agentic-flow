@@ -152,7 +152,7 @@ class InfrastructureDetectionAgentHF:
             debug_dir="debug",
             force_all_categories=True,  # Use smart detection flow
             validate_with_llm=False,  # Disable slow validation
-            confidence_threshold=0.25,  # LOW threshold - SAM3 text prompts have low confidence
+            confidence_threshold=0.0,  # NO filtering - SAM3 text prompts have very low confidence
             optimize_memory=True,  # Clear Qwen before SAM3 for better GPU usage
         )
 

@@ -176,57 +176,69 @@ class InfrastructureDetectionAgentCore:
 
     def _run_direct_category_search(self, image: Image.Image) -> AgentResult:
         """
-        SIMPLE approach:
-        1. Qwen looks at image and says what infrastructure issues it sees (plain text)
-        2. SAM3 segments those things using text prompts
+        SMART DETECTION using Qwen's intelligence:
+        1. Qwen analyzes image and finds objects WITH bounding boxes
+        2. SAM3 segments those specific regions (using point prompts, not text)
 
-        NO JSON, NO BOUNDING BOXES - just simple text.
+        This works because:
+        - Qwen is intelligent and can identify ANY object
+        - SAM3 point prompts are reliable (unlike text prompts)
         """
         start_time = time.time()
 
         # Initialize tool executor
         tool_executor = ToolExecutor(self.sam3_processor, image)
 
-        # If user specified categories, skip Qwen and search directly
+        # If user specified categories, use Qwen to find those specific things
         if self.config.categories:
-            return self._run_text_prompt_search(image, self.config.categories, tool_executor, start_time)
+            print(f"\n{'='*60}")
+            print(f"SMART DETECTION: Looking for {self.config.categories}")
+            print(f"{'='*60}")
 
         print(f"\n{'='*60}")
-        print(f"SMART DETECTION MODE")
-        print(f"Step 1: Asking Qwen what it sees...")
+        print(f"Step 1: Qwen analyzing image...")
         print(f"{'='*60}")
 
-        # Ask Qwen what infrastructure issues it sees (simple text response)
-        found_items = self._ask_qwen_what_it_sees(image)
+        # Ask Qwen to find objects WITH bounding boxes
+        detections = self._ask_qwen_to_detect_with_boxes(image)
 
-        if not found_items:
-            print("Qwen didn't identify any specific issues.")
-            print("Falling back to searching ALL categories...")
-            # Fallback: search ALL infrastructure categories
+        # Filter by user categories if specified
+        if self.config.categories and detections:
+            user_cats = [c.lower() for c in self.config.categories]
+            filtered = []
+            for det in detections:
+                label = det['label'].lower()
+                # Check if detection matches any user category
+                for cat in user_cats:
+                    if cat in label or label in cat:
+                        filtered.append(det)
+                        break
+            if filtered:
+                print(f"Filtered to {len(filtered)} detections matching: {self.config.categories}")
+                detections = filtered
+
+        if not detections:
+            print("Qwen didn't find any objects with bounding boxes.")
+            print("Falling back to text prompt search...")
+            # Fallback to old text prompt method
             from .system_prompt import get_categories
-            found_items = list(get_categories().keys())
+            categories = self.config.categories or list(get_categories().keys())
+            return self._run_text_prompt_search(image, categories, tool_executor, start_time)
+
+        print(f"\nQwen found {len(detections)} objects:")
+        for det in detections:
+            print(f"  - {det['label']} at {det['bbox']}")
 
         # MEMORY OPTIMIZATION: Clear Qwen from GPU before SAM3 segmentation
         if self.config.optimize_memory:
             self._optimize_memory_before_sam3()
 
         print(f"\n{'='*60}")
-        print(f"Step 2: SAM3 searching for: {found_items}")
+        print(f"Step 2: SAM3 segmenting {len(detections)} objects...")
         print(f"{'='*60}")
 
-        # SAM3 segments using text prompts
-        all_masks = []
-        for item in found_items:
-            print(f"  Searching '{item}'...", end=" ", flush=True)
-            try:
-                result = tool_executor.execute("segment_phrase", {"text_prompt": item})
-                if result.success and result.data.get("num_masks", 0) > 0:
-                    num_found = result.data['num_masks']
-                    print(f"✓ {num_found} found")
-                else:
-                    print("✗ none")
-            except Exception as e:
-                print(f"✗ error: {e}")
+        # Use SAM3 to segment each detected region using bounding boxes
+        masks = tool_executor.segment_from_boxes(detections)
 
         # Get all accumulated masks
         masks = tool_executor.get_current_masks()

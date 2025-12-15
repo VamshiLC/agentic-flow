@@ -172,6 +172,16 @@ class ToolExecutor:
                 prompt=text_prompt
             )
 
+            # DEBUG: Log what SAM3 returns
+            logger.debug(f"SAM3 output type: {type(output)}")
+            if output is not None:
+                if isinstance(output, dict):
+                    logger.debug(f"SAM3 output keys: {output.keys()}")
+                    if 'masks' in output:
+                        logger.debug(f"SAM3 masks count: {len(output['masks'])}")
+                        if 'scores' in output:
+                            logger.debug(f"SAM3 scores: {output['scores'][:5] if len(output['scores']) > 5 else output['scores']}")
+
             # Extract masks from output
             masks = self._extract_masks(output)
 
@@ -631,11 +641,17 @@ Then call select_masks_and_return with ONLY the accepted mask IDs.
                 raw_masks = sam3_output.get('masks', [])
                 scores = sam3_output.get('scores', [])
                 boxes = sam3_output.get('boxes', [])
+                print(f"      [SAM3] Found {len(raw_masks)} raw masks")
+                if scores:
+                    score_vals = [s.item() if hasattr(s, 'item') else s for s in scores[:5]]
+                    print(f"      [SAM3] Score samples: {score_vals}")
             elif hasattr(sam3_output, 'masks'):
                 raw_masks = sam3_output.masks
                 scores = getattr(sam3_output, 'scores', [])
                 boxes = getattr(sam3_output, 'boxes', [])
+                print(f"      [SAM3] Found {len(raw_masks)} raw masks (object)")
             else:
+                print(f"      [SAM3] Unexpected output type: {type(sam3_output)}")
                 logger.warning(f"Unexpected SAM3 output type: {type(sam3_output)}")
                 return masks
 
