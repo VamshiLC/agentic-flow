@@ -255,7 +255,11 @@ class InfrastructureDetectionAgentCore:
         tool_executor: ToolExecutor
     ) -> List:
         """
-        Use LLM to validate masks and reject false positives (shadows, etc).
+        Use LLM to validate EACH mask individually - like SAM3 agent.
+
+        For each mask:
+        1. Show the mask overlay on image
+        2. Ask LLM: Does this mask show a {category}? Accept or Reject?
 
         Args:
             image: Original image
@@ -268,75 +272,69 @@ class InfrastructureDetectionAgentCore:
         if not masks:
             return masks
 
-        logger.info(f"Validating {len(masks)} masks with LLM...")
+        logger.info(f"Validating {len(masks)} masks with LLM (SAM3 style)...")
 
-        # Render all masks for LLM to see
-        rendered_image = tool_executor._render_masks(masks)
+        validated_masks = []
 
-        # Build validation prompt
-        mask_list = "\n".join([
-            f"- Mask {m.mask_id}: {m.category} (confidence: {m.score:.2f})"
-            for m in masks
-        ])
+        for i, mask in enumerate(masks):
+            print(f"[{i+1}/{len(masks)}] Checking mask {mask.mask_id}: '{mask.category}'...", end=" ", flush=True)
 
-        validation_prompt = f"""Look at this road image with colored mask overlays. Each mask is labeled with an ID and category.
+            try:
+                # Create single mask overlay
+                single_mask_image = tool_executor._render_masks([mask])
 
-DETECTED MASKS:
-{mask_list}
+                # SAM3-style validation prompt
+                validation_prompt = f"""You are validating a segmentation mask prediction.
 
-For EACH mask, verify if the LABEL matches what's actually in the image:
+CLAIMED DETECTION: "{mask.category}"
 
-VALIDATION RULES:
-1. MANHOLE vs POTHOLE: Manholes are ROUND metal covers with patterns/text. Potholes are irregular holes/damage.
-2. CRACK: Must be actual crack lines in pavement, not shadows or joints.
-3. SIGN/LIGHT: Must be actual traffic infrastructure, not random objects.
-4. FALSE POSITIVES to REJECT: shadows, wet spots, normal road texture, stains, painted lines.
+Look at this image showing a colored mask overlay. The mask highlights an area that was detected as "{mask.category}".
 
-CHECK EACH MASK:
-- Is the labeled category CORRECT for what's shown?
-- Is it a REAL object or just a shadow/false detection?
+YOUR TASK: Determine if the mask CORRECTLY identifies a {mask.category}.
 
-Reply with ONLY the mask IDs that are CORRECTLY labeled real objects.
-Format: KEEP: 1, 3, 5
-Or if all wrong: KEEP: none"""
+CRITICAL DISTINCTIONS:
+- MANHOLE: Round/rectangular METAL COVER with patterns, text, or grid. It's infrastructure, not damage.
+- POTHOLE: Irregular HOLE or DEPRESSION in the road surface. Shows broken/missing pavement.
+- CRACK: Linear break/fracture in pavement surface.
 
-        try:
-            # Call LLM for validation
-            print("Asking LLM to validate each mask...")
-            result = self.qwen_detector.detect(rendered_image, validation_prompt)
+ANALYZE:
+1. What object does the mask actually cover?
+2. Does it match the claimed category "{mask.category}"?
 
-            if result.get("success"):
-                response = result.get("text", "")
-                print(f"LLM response: {response[:300]}...")
-                logger.info(f"LLM validation response: {response[:200]}")
+RESPOND WITH EXACTLY ONE WORD:
+<verdict>Accept</verdict> - if the mask correctly shows a {mask.category}
+<verdict>Reject</verdict> - if the mask shows something else (wrong label) or is a false positive"""
 
-                # Parse which masks to keep
-                keep_ids = self._parse_keep_ids(response, masks)
+                # Call LLM with the mask image
+                result = self.qwen_detector.detect(single_mask_image, validation_prompt)
 
-                if keep_ids is not None:
-                    validated_masks = [m for m in masks if m.mask_id in keep_ids]
-                    rejected_count = len(masks) - len(validated_masks)
+                if result.get("success"):
+                    response = result.get("text", "").lower()
 
-                    # Show what was kept/rejected
-                    print(f"\n✓ LLM KEPT {len(validated_masks)} masks: {keep_ids}")
-                    rejected_ids = [m.mask_id for m in masks if m.mask_id not in keep_ids]
-                    if rejected_ids:
-                        print(f"✗ LLM REJECTED {rejected_count} masks: {rejected_ids}")
-
-                    logger.info(f"LLM rejected {rejected_count} false positives")
-                    return validated_masks
+                    # Parse verdict
+                    if "<verdict>accept</verdict>" in response or "accept" in response.split()[-5:]:
+                        print("✓ Accept")
+                        validated_masks.append(mask)
+                    elif "<verdict>reject</verdict>" in response or "reject" in response.split()[-5:]:
+                        print(f"✗ Reject")
+                        logger.info(f"Mask {mask.mask_id} rejected: {mask.category}")
+                    else:
+                        # Unclear response - keep the mask
+                        print("? Unclear, keeping")
+                        validated_masks.append(mask)
                 else:
-                    # If parsing fails, keep all masks
-                    print("⚠ Could not parse LLM response, keeping all masks")
-                    logger.warning("Could not parse LLM validation, keeping all masks")
-                    return masks
-            else:
-                logger.warning("LLM validation failed, keeping all masks")
-                return masks
+                    print("? Error, keeping")
+                    validated_masks.append(mask)
 
-        except Exception as e:
-            logger.error(f"LLM validation error: {e}")
-            return masks
+            except Exception as e:
+                print(f"? Error: {e}")
+                logger.error(f"Validation error for mask {mask.mask_id}: {e}")
+                validated_masks.append(mask)  # Keep on error
+
+        rejected_count = len(masks) - len(validated_masks)
+        print(f"\nValidation complete: {len(validated_masks)} kept, {rejected_count} rejected")
+
+        return validated_masks
 
     def _parse_keep_ids(self, response: str, masks: List) -> List[int]:
         """Parse mask IDs to keep from LLM response."""
