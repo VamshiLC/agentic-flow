@@ -219,12 +219,12 @@ class InfrastructureDetectionAgentHF:
         bbox_area = bbox_width * bbox_height
         image_area = width * height
 
-        # Minimum size thresholds (in pixels) - reject tiny detections
-        MIN_BBOX_SIZE = 20  # pixels
-        MIN_BBOX_AREA_RATIO = 0.001  # 0.1% of image
+        # Minimum size thresholds (in pixels) - reject very tiny detections
+        MIN_BBOX_SIZE = 10  # pixels (relaxed from 20)
+        MIN_BBOX_AREA_RATIO = 0.0005  # 0.05% of image (relaxed)
 
         # Maximum size thresholds - reject oversized detections
-        MAX_BBOX_AREA_RATIO = 0.7  # 70% of image is too large
+        MAX_BBOX_AREA_RATIO = 0.85  # 85% of image is too large (relaxed from 70%)
 
         # Check minimum dimensions
         if bbox_width < MIN_BBOX_SIZE or bbox_height < MIN_BBOX_SIZE:
@@ -233,30 +233,30 @@ class InfrastructureDetectionAgentHF:
         # Check minimum area ratio
         area_ratio = bbox_area / image_area
         if area_ratio < MIN_BBOX_AREA_RATIO:
-            return False, f"bbox area too small: {area_ratio*100:.2f}% < {MIN_BBOX_AREA_RATIO*100}%"
+            return False, f"bbox area too small: {area_ratio*100:.3f}% < {MIN_BBOX_AREA_RATIO*100}%"
 
         # Check maximum area ratio
         if area_ratio > MAX_BBOX_AREA_RATIO:
             return False, f"bbox area too large: {area_ratio*100:.2f}% > {MAX_BBOX_AREA_RATIO*100}%"
 
-        # Category-specific validations
-        # Abandoned vehicles should have reasonable aspect ratios (not too thin/tall)
+        # Category-specific validations (relaxed)
+        # Abandoned vehicles should have reasonable aspect ratios
         if label in ["abandoned_vehicle", "abandoned_vehicles"]:
             aspect_ratio = bbox_width / bbox_height if bbox_height > 0 else 0
-            if aspect_ratio < 0.3 or aspect_ratio > 5.0:
+            if aspect_ratio < 0.2 or aspect_ratio > 6.0:  # Relaxed from 0.3-5.0
                 return False, f"vehicle aspect ratio suspicious: {aspect_ratio:.2f}"
-            # Vehicles shouldn't be tiny
-            if bbox_area < 5000:
+            # Vehicles shouldn't be very tiny
+            if bbox_area < 2000:  # Relaxed from 5000
                 return False, f"vehicle bbox too small: {bbox_area}px"
 
-        # Potholes should be relatively small and not span the entire image
+        # Potholes - allow larger areas for severe damage
         if label in ["potholes", "pothole"]:
-            if area_ratio > 0.3:  # Pothole covering 30% of image is suspicious
+            if area_ratio > 0.5:  # Relaxed from 0.3
                 return False, f"pothole too large: {area_ratio*100:.2f}%"
 
-        # Cracks should have reasonable dimensions
+        # Cracks can cover larger areas
         if label in ["longitudinal_cracks", "transverse_cracks", "alligator_cracks"]:
-            if area_ratio > 0.5:  # Crack covering 50% is suspicious
+            if area_ratio > 0.7:  # Relaxed from 0.5
                 return False, f"crack too large: {area_ratio*100:.2f}%"
 
         return True, "valid"
@@ -265,7 +265,7 @@ class InfrastructureDetectionAgentHF:
         self,
         response: str,
         image_size: Tuple[int, int],
-        confidence_threshold: float = 0.90
+        confidence_threshold: float = 0.75
     ) -> List[Dict]:
         """
         Parse detection results from Qwen text response.
@@ -356,8 +356,8 @@ class InfrastructureDetectionAgentHF:
             try:
                 label = self._normalize_label(match[0].strip().lower())
 
-                # Default confidence for backward compatibility - set lower to encourage explicit confidence
-                confidence = 0.75
+                # Default confidence for backward compatibility
+                confidence = 0.80
 
                 # Filter by confidence threshold
                 if confidence < confidence_threshold:

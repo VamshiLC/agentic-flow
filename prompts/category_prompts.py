@@ -329,19 +329,24 @@ DETAILED_PROMPTS = {
 def build_detailed_prompt(categories):
     """Build comprehensive detection prompt with detailed descriptions."""
 
-    prompt = """You are an EXPERT infrastructure inspector analyzing street imagery with EXTREMELY HIGH PRECISION.
+    prompt = """You are an EXPERT infrastructure inspector analyzing street/road imagery.
 
-🚨 CRITICAL ANTI-HALLUCINATION RULES - READ FIRST 🚨
+YOUR TASK: Carefully analyze the image and detect ALL visible infrastructure defects and objects.
+
+DETECTION GUIDELINES:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1. ONLY detect objects that are CLEARLY and UNAMBIGUOUSLY visible in the image
-2. If you are NOT 100% certain an object exists, DO NOT report it
-3. It is MUCH BETTER to miss a real defect than to report a false detection
-4. NEVER guess or assume - only report what you can clearly see
-5. Shadows, reflections, and dark patches are NOT defects
-6. If the image is blurry or unclear in an area, DO NOT detect anything there
-7. When in doubt, output "No defects detected"
+✓ DETECT real defects that are clearly visible in the image
+✓ Look carefully at the ROAD SURFACE for cracks, potholes, damage
+✓ Check for damaged road markings, faded paint, worn crosswalks
+✓ Identify manholes, signs, traffic lights that are visible
+✓ For each detection, provide accurate bounding box coordinates
+✓ Assign realistic confidence scores based on how clearly you can see the defect
 
-Your task is to ACCURATELY detect infrastructure issues ONLY when you are absolutely certain they exist.
+ACCURACY RULES:
+✗ Do NOT detect shadows or dark patches as defects
+✗ Do NOT detect objects that are NOT clearly visible
+✗ Do NOT confuse normal road texture with cracks
+✗ For abandoned vehicles - must show clear signs of abandonment (flat tires, rust, broken windows)
 
 """
 
@@ -390,37 +395,30 @@ Defect: abandoned_vehicle, Box: [200, 150, 900, 550], Confidence: 0.78
 
 If NO defects match the criteria: "No defects detected"
 
-🚨 CRITICAL ACCURACY RULES - ZERO TOLERANCE FOR FALSE POSITIVES 🚨:
-✓ ONLY detect if you are EXTREMELY CONFIDENT (>95%) it matches ALL the criteria
-✓ FALSE POSITIVES are UNACCEPTABLE - be VERY conservative!
-✓ Read the "DO NOT CONFUSE WITH" section CAREFULLY before detecting
-✓ If something looks even SLIGHTLY ambiguous or unclear, DO NOT DETECT IT
-✓ For ALL categories:
-  - Require MULTIPLE clear visual indicators (not just one)
-  - NEVER detect based on shadows, reflections, dark patches, or unclear areas
-  - NEVER detect objects that might not exist
-  - Err STRONGLY on the side of NOT detecting rather than false positive
-✓ Provide REALISTIC confidence scores - if unsure, use lower confidence or don't detect
-✓ Triple-check each detection against the negative examples
+IMPORTANT ACCURACY GUIDELINES:
+✓ Detect defects you can clearly see - be thorough but accurate
+✓ Use confidence scores appropriately:
+  - 0.90-1.0: Very clear, obvious defect
+  - 0.80-0.89: Clear defect, high confidence
+  - 0.70-0.79: Likely defect, moderate confidence
+✓ Check the "DO NOT CONFUSE WITH" section before detecting
+✓ For sensitive categories (abandoned_vehicle):
+  - Require multiple clear visual indicators
+  - Regular parked cars are NOT abandoned vehicles
 
-⚠️ COMMON HALLUCINATION MISTAKES TO AVOID:
-✗ Detecting vehicles when there are no vehicles in the image
-✗ Detecting cracks when the road surface is actually intact
-✗ Detecting objects in shadows or dark areas
-✗ Detecting things based on patterns that look similar but aren't the actual object
-✗ Detecting objects at the edge of the image that are cut off or unclear
-✗ Making up detections to "fill" the response - empty is OK!
+AVOID THESE MISTAKES:
+✗ Detecting shadows as potholes or cracks
+✗ Detecting normal road texture as damage
+✗ Detecting regular parked vehicles as abandoned
+✗ Missing obvious defects that are clearly visible
 
-MANDATORY ACCURACY CHECKLIST FOR EACH DETECTION:
-1. Can I CLEARLY see this object in the image? (not guessing)
-2. Does it match ALL the visual cues listed above?
-3. Is it definitely NOT in the "DO NOT CONFUSE WITH" list?
-4. Does the location make logical sense?
-5. Am I >95% confident this is real and not a shadow/reflection/noise?
-6. Would another expert agree this is definitely there?
+DETECTION CHECKLIST:
+1. Can I see this defect clearly in the image?
+2. Does it match the visual cues for this category?
+3. Is it NOT in the "DO NOT CONFUSE WITH" list?
+4. What is my confidence level (0.70-1.0)?
 
-If you answer NO or MAYBE to ANY question, DO NOT DETECT!
-When in doubt, report "No defects detected" - this is the SAFE choice.
+Be thorough - detect ALL real defects visible in the image!
 
 Now carefully analyze this image:
 """
