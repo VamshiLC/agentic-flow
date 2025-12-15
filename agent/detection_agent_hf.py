@@ -200,7 +200,9 @@ class InfrastructureDetectionAgentHF:
                 image_array.shape[:2],
                 exclude_categories=self.exclude_categories
             )
-            logger.debug(f"Filtered {len(enhanced_detections)} -> {len(filtered_detections)} detections")
+            logger.info(f"FILTER DEBUG: {len(enhanced_detections)} raw detections -> {len(filtered_detections)} after filtering")
+            if len(enhanced_detections) > 0 and len(filtered_detections) == 0:
+                logger.warning(f"⚠️  ALL DETECTIONS FILTERED OUT! Raw detections were: {[d.get('label') for d in enhanced_detections]}")
         except Exception as e:
             logger.warning(f"Filter failed, using unfiltered detections: {e}")
             filtered_detections = enhanced_detections
@@ -208,7 +210,8 @@ class InfrastructureDetectionAgentHF:
         return {
             'detections': filtered_detections,
             'num_detections': len(filtered_detections),
-            'has_masks': True
+            'has_masks': True,
+            'raw_detections': len(enhanced_detections)  # Add for debugging
         }
 
     def _parse_detections(
