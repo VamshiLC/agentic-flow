@@ -157,12 +157,24 @@ class InfrastructureDetectionAgentHF:
                 description = det.get('description', label)
                 bbox = det.get('bbox', None)  # Get bounding box from detection
 
-                # Pass bbox to SAM3 (preferred method for accurate segmentation)
-                mask = self._segment_with_sam3(
-                    image,
-                    query=description,  # Fallback if bbox fails
-                    bbox=bbox           # Primary method
-                )
+                mask = None
+
+                # Try SAM3 segmentation first
+                if self.sam3_processor is not None:
+                    try:
+                        mask = self._segment_with_sam3(
+                            image,
+                            query=description,  # Fallback if bbox fails
+                            bbox=bbox           # Primary method
+                        )
+                    except Exception as sam3_err:
+                        logger.warning(f"SAM3 failed for {label}: {sam3_err}")
+                        mask = None
+
+                # FALLBACK: Create mask from bounding box if SAM3 fails
+                if mask is None and bbox is not None:
+                    logger.info(f"Using bbox fallback mask for {label}")
+                    mask = self._create_bbox_mask(bbox, image.size)
 
                 # Convert mask to JSON-serializable format
                 if mask is not None:
@@ -180,7 +192,7 @@ class InfrastructureDetectionAgentHF:
                     det['has_mask'] = False
             except Exception as e:
                 label = det.get('label', 'unknown')
-                logger.warning(f"SAM3 segmentation failed for {label}: {e}")
+                logger.warning(f"Mask generation failed for {label}: {e}")
                 det['mask'] = None
                 det['has_mask'] = False
 
@@ -191,6 +203,39 @@ class InfrastructureDetectionAgentHF:
             'num_detections': len(enhanced_detections),
             'has_masks': True
         }
+
+    def _create_bbox_mask(
+        self,
+        bbox: List[int],
+        image_size: Tuple[int, int]
+    ) -> np.ndarray:
+        """
+        Create a simple rectangular mask from bounding box.
+        Used as fallback when SAM3 segmentation fails.
+
+        Args:
+            bbox: [x1, y1, x2, y2] bounding box coordinates
+            image_size: (width, height) of the image
+
+        Returns:
+            np.ndarray: Binary mask with bbox region filled
+        """
+        width, height = image_size
+        x1, y1, x2, y2 = bbox
+
+        # Clamp coordinates to image bounds
+        x1 = max(0, min(x1, width))
+        y1 = max(0, min(y1, height))
+        x2 = max(0, min(x2, width))
+        y2 = max(0, min(y2, height))
+
+        # Create empty mask
+        mask = np.zeros((height, width), dtype=np.uint8)
+
+        # Fill the bounding box region
+        mask[y1:y2, x1:x2] = 1
+
+        return mask
 
     def _validate_detection(
         self,
@@ -220,11 +265,11 @@ class InfrastructureDetectionAgentHF:
         image_area = width * height
 
         # Minimum size thresholds (in pixels) - reject very tiny detections
-        MIN_BBOX_SIZE = 10  # pixels (relaxed from 20)
-        MIN_BBOX_AREA_RATIO = 0.0005  # 0.05% of image (relaxed)
+        MIN_BBOX_SIZE = 10  # pixels
+        MIN_BBOX_AREA_RATIO = 0.0005  # 0.05% of image
 
         # Maximum size thresholds - reject oversized detections
-        MAX_BBOX_AREA_RATIO = 0.85  # 85% of image is too large (relaxed from 70%)
+        MAX_BBOX_AREA_RATIO = 0.85  # 85% of image is too large
 
         # Check minimum dimensions
         if bbox_width < MIN_BBOX_SIZE or bbox_height < MIN_BBOX_SIZE:
@@ -239,24 +284,24 @@ class InfrastructureDetectionAgentHF:
         if area_ratio > MAX_BBOX_AREA_RATIO:
             return False, f"bbox area too large: {area_ratio*100:.2f}% > {MAX_BBOX_AREA_RATIO*100}%"
 
-        # Category-specific validations (relaxed)
+        # Category-specific validations
         # Abandoned vehicles should have reasonable aspect ratios
         if label in ["abandoned_vehicle", "abandoned_vehicles"]:
             aspect_ratio = bbox_width / bbox_height if bbox_height > 0 else 0
-            if aspect_ratio < 0.2 or aspect_ratio > 6.0:  # Relaxed from 0.3-5.0
+            if aspect_ratio < 0.2 or aspect_ratio > 6.0:
                 return False, f"vehicle aspect ratio suspicious: {aspect_ratio:.2f}"
             # Vehicles shouldn't be very tiny
-            if bbox_area < 2000:  # Relaxed from 5000
+            if bbox_area < 2000:
                 return False, f"vehicle bbox too small: {bbox_area}px"
 
         # Potholes - allow larger areas for severe damage
         if label in ["potholes", "pothole"]:
-            if area_ratio > 0.5:  # Relaxed from 0.3
+            if area_ratio > 0.5:
                 return False, f"pothole too large: {area_ratio*100:.2f}%"
 
         # Cracks can cover larger areas
         if label in ["longitudinal_cracks", "transverse_cracks", "alligator_cracks"]:
-            if area_ratio > 0.7:  # Relaxed from 0.5
+            if area_ratio > 0.7:
                 return False, f"crack too large: {area_ratio*100:.2f}%"
 
         return True, "valid"
@@ -351,13 +396,12 @@ class InfrastructureDetectionAgentHF:
                 continue
 
         # Process matches without confidence (backward compatibility)
-        # NOTE: With confidence threshold at 0.90, most of these will be filtered
         for match in matches_no_conf:
             try:
                 label = self._normalize_label(match[0].strip().lower())
 
                 # Default confidence for backward compatibility
-                confidence = 0.80
+                confidence = 0.8
 
                 # Filter by confidence threshold
                 if confidence < confidence_threshold:

@@ -286,12 +286,12 @@ def draw_category_detections(frame_rgb, detections, category):
                 colored_mask = np.zeros_like(frame)
                 colored_mask[mask_array > 0] = color_rgb
 
-                # Blend with overlay (30% transparency)
-                mask_overlay = cv2.addWeighted(mask_overlay, 1.0, colored_mask, 0.3, 0)
+                # Blend with overlay (50% transparency - more visible)
+                mask_overlay = cv2.addWeighted(mask_overlay, 1.0, colored_mask, 0.5, 0)
 
-                # Draw mask contour
+                # Draw mask contour (thicker line)
                 contours, _ = cv2.findContours(mask_array, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                cv2.drawContours(frame, contours, -1, color_rgb, 2)
+                cv2.drawContours(frame, contours, -1, color_rgb, 3)
 
             except Exception as e:
                 logger.warning(f"Failed to render mask for {category}: {e}")
@@ -323,8 +323,8 @@ def draw_category_detections(frame_rgb, detections, category):
                 2
             )
 
-    # Blend mask overlay with frame
-    final = cv2.addWeighted(frame, 0.7, mask_overlay, 0.3, 0)
+    # Blend mask overlay with frame (more visible masks)
+    final = cv2.addWeighted(frame, 0.6, mask_overlay, 0.4, 0)
 
     return final
 

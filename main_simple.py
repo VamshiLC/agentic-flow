@@ -80,12 +80,12 @@ def draw_detections(frame: np.ndarray, detections: list) -> np.ndarray:
                 colored_mask = np.zeros_like(annotated)
                 colored_mask[mask_array > 0] = color
 
-                # Blend with overlay (30% transparency)
-                mask_overlay = cv2.addWeighted(mask_overlay, 1.0, colored_mask, 0.3, 0)
+                # Blend with overlay (50% transparency - more visible)
+                mask_overlay = cv2.addWeighted(mask_overlay, 1.0, colored_mask, 0.5, 0)
 
-                # Draw mask contour
+                # Draw mask contour (thicker line)
                 contours, _ = cv2.findContours(mask_array, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                cv2.drawContours(annotated, contours, -1, color, 2)
+                cv2.drawContours(annotated, contours, -1, color, 3)
 
             except Exception as e:
                 logging.warning(f"Failed to render mask for {label}: {e}")
@@ -126,8 +126,8 @@ def draw_detections(frame: np.ndarray, detections: list) -> np.ndarray:
             thickness
         )
 
-    # Blend mask overlay with annotated frame
-    final = cv2.addWeighted(annotated, 0.7, mask_overlay, 0.3, 0)
+    # Blend mask overlay with annotated frame (more visible masks)
+    final = cv2.addWeighted(annotated, 0.6, mask_overlay, 0.4, 0)
 
     return final
 
