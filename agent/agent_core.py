@@ -655,15 +655,24 @@ What objects do you see in this image?"""
         import re
 
         detections = []
+        json_str = None
+
+        print(f"  Raw response length: {len(response)}")
+        print(f"  Raw response: {response[:500]}...")
 
         try:
-            # Method 1: Try to find JSON array between ```json and ```
-            code_block_match = re.search(r'```json\s*([\s\S]*?)\s*```', response)
-            if code_block_match:
-                json_str = code_block_match.group(1).strip()
-            else:
-                # Method 2: Find the outermost [...] array (greedy match)
-                # Count brackets to find complete array
+            # Method 1: Try to find JSON in ```json code block
+            if '```json' in response:
+                start_marker = response.find('```json')
+                if start_marker != -1:
+                    start_marker += 7  # Skip past ```json
+                    end_marker = response.find('```', start_marker)
+                    if end_marker != -1:
+                        json_str = response[start_marker:end_marker].strip()
+                        print(f"  Found code block JSON: {json_str[:100]}...")
+
+            # Method 2: Use bracket counting to find complete [...] array
+            if not json_str:
                 start_idx = response.find('[')
                 if start_idx != -1:
                     bracket_count = 0
@@ -677,12 +686,17 @@ What objects do you see in this image?"""
                                 end_idx = i + 1
                                 break
                     json_str = response[start_idx:end_idx]
-                else:
-                    json_str = None
+                    print(f"  Found bracket-counted JSON: {json_str[:100]}...")
+
+            # Method 3: Try the whole response as JSON
+            if not json_str:
+                json_str = response.strip()
+                print(f"  Trying whole response as JSON")
 
             if json_str:
-                print(f"  Parsing JSON: {json_str[:200]}...")
+                print(f"  Parsing JSON ({len(json_str)} chars): {json_str[:200]}...")
                 parsed = json.loads(json_str)
+                print(f"  Parsed successfully! Type: {type(parsed)}, Length: {len(parsed) if isinstance(parsed, list) else 'N/A'}")
 
                 if isinstance(parsed, list):
                     for item in parsed:
@@ -716,11 +730,15 @@ What objects do you see in this image?"""
 
         except json.JSONDecodeError as e:
             print(f"  JSON parse error: {e}")
+            print(f"  Attempted to parse: {json_str[:300] if json_str else 'None'}...")
             logger.debug(f"JSON parse failed: {e}")
         except Exception as e:
             print(f"  Parse error: {e}")
+            import traceback
+            traceback.print_exc()
             logger.debug(f"JSON detection parsing failed: {e}")
 
+        print(f"  Total detections parsed: {len(detections)}")
         return detections
 
     def _parse_detection_response(self, response: str, img_width: int, img_height: int) -> List[Dict]:
