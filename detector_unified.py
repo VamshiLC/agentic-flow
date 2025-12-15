@@ -38,24 +38,38 @@ INFRASTRUCTURE_CATEGORIES = {
 }
 
 
-# Color mapping (BGR for OpenCV)
-DEFECT_COLORS = {
-    "potholes": (0, 0, 255),              # Red
-    "alligator_cracks": (0, 200, 255),    # Orange
-    "longitudinal_cracks": (0, 255, 0),   # Green
-    "transverse_cracks": (255, 0, 0),     # Blue
-    "abandoned_vehicle": (0, 0, 200),     # Dark red
-    "homeless_encampment": (0, 165, 255), # Orange
-    "homeless_person": (255, 0, 255),     # Magenta
-    "manholes": (128, 128, 128),          # Gray
-    "damaged_paint": (128, 0, 128),       # Purple
-    "damaged_crosswalks": (255, 0, 255),  # Magenta
-    "dumped_trash": (100, 100, 100),      # Dark gray
-    "graffiti": (255, 20, 147),           # Deep pink
-    "street_signs": (255, 255, 0),        # Yellow
-    "traffic_lights": (0, 255, 255),      # Yellow
-    "tyre_marks": (200, 200, 200)         # Light gray
-}
+# Modern color palette (BGR for OpenCV) - Grouped by severity
+# Import from visualization_styles for consistency
+try:
+    from visualization_styles import MODERN_COLORS as DEFECT_COLORS
+except ImportError:
+    # Fallback colors if visualization_styles not available
+    DEFECT_COLORS = {
+        # CRITICAL - Red tones (requires immediate attention)
+        "potholes": (40, 50, 240),                    # Bright red
+        "alligator_cracks": (60, 90, 255),            # Orange-red
+
+        # HIGH PRIORITY - Orange/Yellow tones
+        "transverse_cracks": (0, 140, 255),           # Deep orange
+        "longitudinal_cracks": (0, 200, 255),         # Orange
+        "damaged_crosswalks": (0, 180, 240),          # Dark orange
+        "damaged_paint": (0, 165, 255),               # Medium orange
+
+        # SOCIAL ISSUES - Purple/Magenta tones
+        "homeless_encampment": (180, 50, 200),        # Purple
+        "homeless_person": (220, 80, 255),            # Magenta
+        "abandoned_vehicle": (140, 0, 180),           # Dark purple
+        "dumped_trash": (160, 60, 180),               # Purple-gray
+
+        # INFRASTRUCTURE - Blue/Cyan tones
+        "manholes": (200, 150, 50),                   # Steel blue
+        "street_signs": (255, 200, 0),                # Bright cyan-blue
+        "traffic_lights": (220, 180, 0),              # Deep cyan
+
+        # MINOR - Green/Gray tones
+        "tyre_marks": (100, 120, 100),                # Muted green-gray
+        "graffiti": (180, 100, 220),                  # Pink-purple
+    }
 
 
 class UnifiedInfrastructureDetector:

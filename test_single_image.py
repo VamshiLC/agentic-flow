@@ -13,93 +13,25 @@ from pathlib import Path
 from PIL import Image
 
 from detector_unified import UnifiedInfrastructureDetector, DEFECT_COLORS
+from visualization_styles import draw_stylish_detections
 
 
 def draw_detections_with_masks(image_array, detections):
-    """Draw bounding boxes and colored segmentation masks on image."""
-    annotated = image_array.copy()
-
-    # Create overlay for masks
-    mask_overlay = annotated.copy()
-
+    """Draw bounding boxes and colored segmentation masks on image with modern styling."""
+    # Print detection info for debugging
     for idx, det in enumerate(detections):
         label = det.get('label', 'unknown')
         bbox = det.get('bbox', [])
         confidence = det.get('confidence', 0.0)
         has_mask = det.get('has_mask', False)
-        mask = det.get('mask', None)
 
-        if len(bbox) == 4:
-            x1, y1, x2, y2 = map(int, bbox)
-            color = det.get('color', (0, 255, 0))
+        if has_mask:
+            print(f"  [{idx+1}] {label}: confidence={confidence:.3f}, bbox={bbox}, ✓ MASK RENDERED")
+        else:
+            print(f"  [{idx+1}] {label}: confidence={confidence:.3f}, bbox={bbox}, ✗ NO MASK")
 
-            # Convert BGR to RGB for display
-            color_rgb = (color[2], color[1], color[0])
-
-            # Draw segmentation mask if available
-            if has_mask and mask is not None:
-                try:
-                    # Convert mask to numpy array if needed
-                    if isinstance(mask, list):
-                        mask_array = np.array(mask, dtype=np.uint8)
-                    else:
-                        mask_array = np.array(mask, dtype=np.uint8)
-
-                    # Ensure mask is 2D
-                    if mask_array.ndim > 2:
-                        mask_array = mask_array.squeeze()
-
-                    # Resize mask to image size if needed
-                    if mask_array.shape != (image_array.shape[0], image_array.shape[1]):
-                        mask_array = cv2.resize(mask_array,
-                                              (image_array.shape[1], image_array.shape[0]),
-                                              interpolation=cv2.INTER_NEAREST)
-
-                    # Create colored mask overlay
-                    colored_mask = np.zeros_like(annotated)
-                    colored_mask[mask_array > 0] = color_rgb
-
-                    # Blend with original image (30% transparency)
-                    mask_overlay = cv2.addWeighted(mask_overlay, 1.0, colored_mask, 0.3, 0)
-
-                    # Draw mask contour
-                    contours, _ = cv2.findContours(mask_array, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                    cv2.drawContours(annotated, contours, -1, color_rgb, 2)
-
-                    print(f"  [{idx+1}] {label}: confidence={confidence:.3f}, bbox={bbox}, ✓ MASK RENDERED")
-
-                except Exception as e:
-                    print(f"  [{idx+1}] {label}: confidence={confidence:.3f}, bbox={bbox}, ✗ MASK ERROR: {e}")
-                    has_mask = False
-            else:
-                print(f"  [{idx+1}] {label}: confidence={confidence:.3f}, bbox={bbox}, ✗ NO MASK")
-
-            # Draw bbox
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), color_rgb, 3)
-
-            # Draw label with confidence and mask status
-            mask_status = "✓MASK" if has_mask else "✗NO-MASK"
-            text = f"{label} {confidence:.2f} {mask_status}"
-
-            # Background for text
-            (text_w, text_h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-            cv2.rectangle(annotated, (x1, y1 - text_h - 15), (x1 + text_w + 10, y1), color_rgb, -1)
-
-            # Text
-            cv2.putText(
-                annotated,
-                text,
-                (x1 + 5, y1 - 5),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (255, 255, 255),
-                2
-            )
-
-    # Blend mask overlay with annotated image
-    final = cv2.addWeighted(annotated, 0.7, mask_overlay, 0.3, 0)
-
-    return final
+    # Use the new stylish visualization module
+    return draw_stylish_detections(image_array, detections, draw_masks=True)
 
 
 def main():
