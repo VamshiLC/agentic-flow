@@ -302,38 +302,74 @@ class InfrastructureDetectionAgentCore:
         start_time: float
     ) -> AgentResult:
         """
-        Fallback: Search using SAM3 text prompts (old approach).
+        Search using SAM3 text prompts with multiple alternatives per category.
 
-        Used when:
-        - User specifies specific categories
-        - Smart detection fails
+        SAM3 text prompts work better with simple, common object names.
+        We try multiple prompts for each category to increase detection.
         """
+        # Map categories to multiple SAM3-friendly prompts
+        # SAM3 responds better to common object names
+        category_prompts = {
+            # Vehicles - try multiple terms
+            'car': ['car', 'vehicle', 'automobile', 'sedan', 'truck', 'van'],
+            'vehicle': ['car', 'vehicle', 'automobile', 'sedan', 'truck'],
+            'abandoned vehicle': ['car', 'vehicle', 'automobile', 'truck'],
+            # Homeless/encampments
+            'tent': ['tent', 'tarp', 'shelter', 'blanket', 'sleeping bag', 'cardboard'],
+            'encampment': ['tent', 'tarp', 'shelter', 'blanket'],
+            # Road damage
+            'pothole': ['pothole', 'hole', 'pit', 'cavity'],
+            'crack': ['crack', 'fracture', 'split', 'line'],
+            # Infrastructure
+            'manhole': ['manhole', 'manhole cover', 'drain cover', 'metal cover', 'grate'],
+            'graffiti': ['graffiti', 'spray paint', 'paint', 'writing on wall'],
+            # Trash
+            'trash': ['trash', 'garbage', 'litter', 'debris', 'bag', 'bottle', 'can'],
+            'garbage': ['garbage', 'trash', 'litter', 'debris'],
+            'illegal dumping': ['furniture', 'mattress', 'couch', 'appliance', 'debris pile'],
+            # Signs/lights
+            'damaged sign': ['sign', 'street sign', 'road sign', 'stop sign'],
+            'damaged light': ['street light', 'lamp post', 'light pole'],
+            'damaged crosswalk': ['crosswalk', 'zebra crossing', 'road marking'],
+            'blocked sidewalk': ['obstruction', 'barrier', 'blockage'],
+        }
+
         print(f"\n{'='*60}")
         print(f"TEXT PROMPT SEARCH: {len(categories)} categories")
         print(f"{'='*60}")
         logger.info(f"=== SEARCHING {len(categories)} CATEGORIES ===")
 
-        # Search EVERY category
+        # Search EVERY category with multiple alternative prompts
         found_categories = []
         total_masks_found = 0
         for i, category in enumerate(categories):
-            print(f"[{i+1}/{len(categories)}] Searching: {category}...", end=" ", flush=True)
+            # Get alternative prompts for this category
+            prompts_to_try = category_prompts.get(category.lower(), [category])
+
+            print(f"[{i+1}/{len(categories)}] Searching: {category}...")
             logger.info(f"[{i+1}/{len(categories)}] Searching: {category}")
 
-            try:
-                result = tool_executor.execute("segment_phrase", {"text_prompt": category})
-                if result.success and result.data.get("num_masks", 0) > 0:
-                    num_found = result.data['num_masks']
-                    total_masks_found += num_found
-                    print(f"✓ {num_found} mask(s)")
-                    logger.info(f"  ✓ Found {num_found} mask(s) for '{category}'")
-                    found_categories.append(category)
-                else:
-                    print("✗ 0 masks")
-                    logger.debug(f"  ✗ No masks for '{category}'")
-            except Exception as e:
-                print(f"ERROR: {e}")
-                logger.warning(f"  Error searching '{category}': {e}")
+            category_found = False
+            for prompt in prompts_to_try:
+                print(f"    Trying '{prompt}'...", end=" ", flush=True)
+                try:
+                    result = tool_executor.execute("segment_phrase", {"text_prompt": prompt})
+                    if result.success and result.data.get("num_masks", 0) > 0:
+                        num_found = result.data['num_masks']
+                        total_masks_found += num_found
+                        print(f"✓ {num_found} mask(s)")
+                        logger.info(f"  ✓ Found {num_found} mask(s) for '{prompt}'")
+                        category_found = True
+                        # Don't break - try all prompts to get more detections
+                    else:
+                        print("✗")
+                        logger.debug(f"  ✗ No masks for '{prompt}'")
+                except Exception as e:
+                    print(f"ERROR: {e}")
+                    logger.warning(f"  Error searching '{prompt}': {e}")
+
+            if category_found:
+                found_categories.append(category)
 
         # Get all masks found
         masks = tool_executor.get_all_masks()
