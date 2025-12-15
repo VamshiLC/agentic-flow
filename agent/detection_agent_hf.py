@@ -192,11 +192,80 @@ class InfrastructureDetectionAgentHF:
             'has_masks': True
         }
 
+    def _validate_detection(
+        self,
+        bbox: List[int],
+        label: str,
+        image_size: Tuple[int, int],
+        confidence: float
+    ) -> Tuple[bool, str]:
+        """
+        Validate a detection to filter out hallucinations and false positives.
+
+        Args:
+            bbox: [x1, y1, x2, y2] bounding box
+            label: Detection category label
+            image_size: (width, height) of image
+            confidence: Detection confidence score
+
+        Returns:
+            Tuple of (is_valid, rejection_reason)
+        """
+        width, height = image_size
+        x1, y1, x2, y2 = bbox
+
+        bbox_width = x2 - x1
+        bbox_height = y2 - y1
+        bbox_area = bbox_width * bbox_height
+        image_area = width * height
+
+        # Minimum size thresholds (in pixels) - reject tiny detections
+        MIN_BBOX_SIZE = 20  # pixels
+        MIN_BBOX_AREA_RATIO = 0.001  # 0.1% of image
+
+        # Maximum size thresholds - reject oversized detections
+        MAX_BBOX_AREA_RATIO = 0.7  # 70% of image is too large
+
+        # Check minimum dimensions
+        if bbox_width < MIN_BBOX_SIZE or bbox_height < MIN_BBOX_SIZE:
+            return False, f"bbox too small: {bbox_width}x{bbox_height} < {MIN_BBOX_SIZE}px"
+
+        # Check minimum area ratio
+        area_ratio = bbox_area / image_area
+        if area_ratio < MIN_BBOX_AREA_RATIO:
+            return False, f"bbox area too small: {area_ratio*100:.2f}% < {MIN_BBOX_AREA_RATIO*100}%"
+
+        # Check maximum area ratio
+        if area_ratio > MAX_BBOX_AREA_RATIO:
+            return False, f"bbox area too large: {area_ratio*100:.2f}% > {MAX_BBOX_AREA_RATIO*100}%"
+
+        # Category-specific validations
+        # Abandoned vehicles should have reasonable aspect ratios (not too thin/tall)
+        if label in ["abandoned_vehicle", "abandoned_vehicles"]:
+            aspect_ratio = bbox_width / bbox_height if bbox_height > 0 else 0
+            if aspect_ratio < 0.3 or aspect_ratio > 5.0:
+                return False, f"vehicle aspect ratio suspicious: {aspect_ratio:.2f}"
+            # Vehicles shouldn't be tiny
+            if bbox_area < 5000:
+                return False, f"vehicle bbox too small: {bbox_area}px"
+
+        # Potholes should be relatively small and not span the entire image
+        if label in ["potholes", "pothole"]:
+            if area_ratio > 0.3:  # Pothole covering 30% of image is suspicious
+                return False, f"pothole too large: {area_ratio*100:.2f}%"
+
+        # Cracks should have reasonable dimensions
+        if label in ["longitudinal_cracks", "transverse_cracks", "alligator_cracks"]:
+            if area_ratio > 0.5:  # Crack covering 50% is suspicious
+                return False, f"crack too large: {area_ratio*100:.2f}%"
+
+        return True, "valid"
+
     def _parse_detections(
         self,
         response: str,
         image_size: Tuple[int, int],
-        confidence_threshold: float = 0.7
+        confidence_threshold: float = 0.90
     ) -> List[Dict]:
         """
         Parse detection results from Qwen text response.
@@ -248,8 +317,19 @@ class InfrastructureDetectionAgentHF:
                 x2 = max(0, min(x2, width))
                 y2 = max(0, min(y2, height))
 
-                # Validate bbox
+                # Validate bbox dimensions
                 if x2 > x1 and y2 > y1:
+                    bbox = [x1, y1, x2, y2]
+
+                    # Post-processing validation to filter hallucinations
+                    is_valid, rejection_reason = self._validate_detection(
+                        bbox, label, (width, height), confidence
+                    )
+
+                    if not is_valid:
+                        logger.info(f"Filtered out {label}: {rejection_reason}")
+                        continue
+
                     color = DEFECT_COLORS.get(label, (0, 255, 0))
 
                     # Create detailed SAM3 prompt
@@ -258,7 +338,7 @@ class InfrastructureDetectionAgentHF:
                     detection = {
                         "label": label,
                         "category": label,
-                        "bbox": [x1, y1, x2, y2],
+                        "bbox": bbox,
                         "confidence": confidence,  # Use parsed confidence
                         "color": color,
                         "description": sam3_description  # Better prompt for SAM3
@@ -271,12 +351,13 @@ class InfrastructureDetectionAgentHF:
                 continue
 
         # Process matches without confidence (backward compatibility)
+        # NOTE: With confidence threshold at 0.90, most of these will be filtered
         for match in matches_no_conf:
             try:
                 label = self._normalize_label(match[0].strip().lower())
 
-                # Default confidence for backward compatibility
-                confidence = 0.8
+                # Default confidence for backward compatibility - set lower to encourage explicit confidence
+                confidence = 0.75
 
                 # Filter by confidence threshold
                 if confidence < confidence_threshold:
@@ -295,8 +376,19 @@ class InfrastructureDetectionAgentHF:
                 x2 = max(0, min(x2, width))
                 y2 = max(0, min(y2, height))
 
-                # Validate bbox
+                # Validate bbox dimensions
                 if x2 > x1 and y2 > y1:
+                    bbox = [x1, y1, x2, y2]
+
+                    # Post-processing validation to filter hallucinations
+                    is_valid, rejection_reason = self._validate_detection(
+                        bbox, label, (width, height), confidence
+                    )
+
+                    if not is_valid:
+                        logger.info(f"Filtered out {label}: {rejection_reason}")
+                        continue
+
                     color = DEFECT_COLORS.get(label, (0, 255, 0))
 
                     # Create detailed SAM3 prompt
@@ -305,7 +397,7 @@ class InfrastructureDetectionAgentHF:
                     detection = {
                         "label": label,
                         "category": label,
-                        "bbox": [x1, y1, x2, y2],
+                        "bbox": bbox,
                         "confidence": confidence,
                         "color": color,
                         "description": sam3_description  # Better prompt for SAM3

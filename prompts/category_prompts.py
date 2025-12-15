@@ -329,9 +329,19 @@ DETAILED_PROMPTS = {
 def build_detailed_prompt(categories):
     """Build comprehensive detection prompt with detailed descriptions."""
 
-    prompt = """You are an EXPERT infrastructure inspector analyzing street imagery with HIGH PRECISION.
+    prompt = """You are an EXPERT infrastructure inspector analyzing street imagery with EXTREMELY HIGH PRECISION.
 
-Your task is to ACCURATELY detect infrastructure issues and objects. Use the detailed criteria below.
+🚨 CRITICAL ANTI-HALLUCINATION RULES - READ FIRST 🚨
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. ONLY detect objects that are CLEARLY and UNAMBIGUOUSLY visible in the image
+2. If you are NOT 100% certain an object exists, DO NOT report it
+3. It is MUCH BETTER to miss a real defect than to report a false detection
+4. NEVER guess or assume - only report what you can clearly see
+5. Shadows, reflections, and dark patches are NOT defects
+6. If the image is blurry or unclear in an area, DO NOT detect anything there
+7. When in doubt, output "No defects detected"
+
+Your task is to ACCURATELY detect infrastructure issues ONLY when you are absolutely certain they exist.
 
 """
 
@@ -380,26 +390,37 @@ Defect: abandoned_vehicle, Box: [200, 150, 900, 550], Confidence: 0.78
 
 If NO defects match the criteria: "No defects detected"
 
-🚨 CRITICAL ACCURACY RULES 🚨:
-✓ ONLY detect if you are HIGHLY CONFIDENT (>80%) it matches ALL the criteria
-✓ FALSE POSITIVES are EXTREMELY COSTLY - be conservative!
+🚨 CRITICAL ACCURACY RULES - ZERO TOLERANCE FOR FALSE POSITIVES 🚨:
+✓ ONLY detect if you are EXTREMELY CONFIDENT (>95%) it matches ALL the criteria
+✓ FALSE POSITIVES are UNACCEPTABLE - be VERY conservative!
 ✓ Read the "DO NOT CONFUSE WITH" section CAREFULLY before detecting
-✓ If something looks ambiguous or unclear, DO NOT DETECT IT
-✓ For sensitive categories (homeless_encampment, abandoned_vehicle, homeless_person):
+✓ If something looks even SLIGHTLY ambiguous or unclear, DO NOT DETECT IT
+✓ For ALL categories:
   - Require MULTIPLE clear visual indicators (not just one)
-  - NEVER detect based on vegetation, shadows, or unclear objects
-  - Err on the side of NOT detecting rather than false positive
-✓ Provide realistic confidence scores - don't inflate them
-✓ Double-check each detection against the negative examples
+  - NEVER detect based on shadows, reflections, dark patches, or unclear areas
+  - NEVER detect objects that might not exist
+  - Err STRONGLY on the side of NOT detecting rather than false positive
+✓ Provide REALISTIC confidence scores - if unsure, use lower confidence or don't detect
+✓ Triple-check each detection against the negative examples
 
-ACCURACY CHECKLIST FOR EACH DETECTION:
-1. Does it match ALL the visual cues?
-2. Is it NOT in the "DO NOT CONFUSE WITH" list?
-3. Does the location make sense?
-4. Am I >80% confident?
-5. Have I checked for ambiguity?
+⚠️ COMMON HALLUCINATION MISTAKES TO AVOID:
+✗ Detecting vehicles when there are no vehicles in the image
+✗ Detecting cracks when the road surface is actually intact
+✗ Detecting objects in shadows or dark areas
+✗ Detecting things based on patterns that look similar but aren't the actual object
+✗ Detecting objects at the edge of the image that are cut off or unclear
+✗ Making up detections to "fill" the response - empty is OK!
 
-If you answer NO to any question, DO NOT DETECT!
+MANDATORY ACCURACY CHECKLIST FOR EACH DETECTION:
+1. Can I CLEARLY see this object in the image? (not guessing)
+2. Does it match ALL the visual cues listed above?
+3. Is it definitely NOT in the "DO NOT CONFUSE WITH" list?
+4. Does the location make logical sense?
+5. Am I >95% confident this is real and not a shadow/reflection/noise?
+6. Would another expert agree this is definitely there?
+
+If you answer NO or MAYBE to ANY question, DO NOT DETECT!
+When in doubt, report "No defects detected" - this is the SAFE choice.
 
 Now carefully analyze this image:
 """
