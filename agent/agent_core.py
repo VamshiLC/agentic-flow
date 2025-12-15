@@ -219,11 +219,15 @@ class InfrastructureDetectionAgentCore:
         draw = ImageDraw.Draw(result_image)
 
         colors = {
-            'pothole': (255, 0, 0), 'crack': (255, 165, 0),
-            'manhole': (0, 255, 0), 'graffiti': (255, 0, 255),
-            'trash': (139, 69, 19), 'tent': (0, 255, 255),
-            'homeless': (0, 255, 255), 'encampment': (0, 255, 255),
-            'abandoned': (128, 0, 128),
+            'pothole': (255, 0, 0),       # Red
+            'crack': (255, 165, 0),        # Orange
+            'manhole': (0, 255, 0),        # Green
+            'graffiti': (255, 0, 255),     # Magenta
+            'trash': (139, 69, 19),        # Brown
+            'tent': (0, 255, 255),         # Cyan
+            'car': (0, 0, 255),            # Blue
+            'sign': (255, 255, 0),         # Yellow
+            'crosswalk': (128, 128, 255),  # Light blue
         }
 
         try:
@@ -271,33 +275,47 @@ class InfrastructureDetectionAgentCore:
         """Ask Qwen to detect infrastructure issues with bounding boxes."""
         img_width, img_height = image.size
 
-        prompt = f"""Analyze this street/road image. Detect ONLY these REAL PROBLEMS:
+        prompt = f"""You are an expert infrastructure inspector. Carefully analyze this image and detect ALL objects from these categories:
 
-1. pothole - Holes/depressions in road (NOT shadows, NOT wet spots)
-2. crack - Visible cracks in pavement
-3. manhole - Metal manhole covers
-4. graffiti - Spray paint/tags on walls
-5. trash - Garbage, litter on street
-6. tent/encampment - Homeless tents, tarps, shelters
-7. abandoned vehicle - ONLY vehicles with VISIBLE DAMAGE (flat tires, broken windows, rust, debris on top)
-   DO NOT detect normal parked cars as abandoned!
+CATEGORIES TO DETECT:
+- pothole: Holes, depressions, damage in road surface
+- crack: Cracks, fractures in pavement or walls
+- manhole: Manhole covers, drain grates, utility covers on ground
+- graffiti: Spray paint, tags, markings on walls/surfaces
+- trash: Garbage, litter, debris, dumped items
+- tent: Tents, tarps, makeshift shelters, encampments
+- car: Vehicles (parked cars, trucks, vans)
+- sign: Street signs, traffic signs, any signage
+- crosswalk: Pedestrian crossings, road markings
 
-Return JSON array with bounding boxes:
+IMPORTANT: Detect EVERYTHING you see from these categories. Be thorough!
+
+Return a JSON array with bounding boxes in pixels:
 [
-  {{"label": "pothole", "bbox_2d": [x1, y1, x2, y2]}},
-  {{"label": "crack", "bbox_2d": [x1, y1, x2, y2]}}
+  {{"label": "category_name", "bbox_2d": [x1, y1, x2, y2]}}
 ]
 
-Image size: {img_width}x{img_height} pixels.
-If NO problems found, return: []"""
+Image dimensions: {img_width} x {img_height} pixels.
+Coordinates must be within image bounds.
+
+If truly NOTHING from the categories exists, return: []"""
 
         try:
             result = self.qwen_detector.detect(image, prompt)
+            print(f"Qwen response success: {result.get('success')}")
             if not result.get("success"):
+                print(f"Qwen error: {result.get('error', 'Unknown error')}")
                 return []
-            return self._parse_json_detection_response(result.get("text", ""), img_width, img_height)
+            response_text = result.get("text", "")
+            print(f"Qwen raw response:\n{response_text[:1000]}")
+            detections = self._parse_json_detection_response(response_text, img_width, img_height)
+            print(f"Parsed {len(detections)} detections")
+            return detections
         except Exception as e:
             logger.error(f"Qwen error: {e}")
+            print(f"Qwen exception: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
     def _parse_json_detection_response(self, response: str, img_width: int, img_height: int) -> List[Dict]:
