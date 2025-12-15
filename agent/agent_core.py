@@ -176,8 +176,9 @@ class InfrastructureDetectionAgentCore:
 
     def _run_direct_category_search(self, image: Image.Image) -> AgentResult:
         """
-        QWEN ONLY - Clean bounding box detection.
-        NO SAM3 - just Qwen detecting and drawing boxes.
+        QWEN + SAM3 - Smart detection pipeline.
+        1. Qwen detects category by category
+        2. SAM3 segments each category for precise masks
         Saves output organized by category folders.
         """
         start_time = time.time()
@@ -185,11 +186,53 @@ class InfrastructureDetectionAgentCore:
         import json
 
         print(f"\n{'='*60}")
-        print(f"QWEN DETECTION (Category by Category)")
+        print(f"SMART DETECTION (Qwen + SAM3)")
         print(f"{'='*60}")
 
-        # Ask Qwen to detect with bounding boxes
-        detections = self._ask_qwen_to_detect_with_boxes(image)
+        # Initialize SAM3 tool executor
+        tool_executor = ToolExecutor(self.sam3_processor, image)
+
+        # STEP 1: Qwen detects objects category by category
+        print(f"\n[STEP 1] QWEN DETECTION (Category by Category)")
+        print(f"-" * 40)
+        qwen_detections = self._ask_qwen_to_detect_with_boxes(image)
+
+        # STEP 2: SAM3 segments each unique category
+        print(f"\n[STEP 2] SAM3 SEGMENTATION")
+        print(f"-" * 40)
+
+        # Get unique categories from Qwen detections
+        categories_found = list(set(d['label'] for d in qwen_detections))
+
+        for category in categories_found:
+            print(f"  Segmenting: {category}...", end=" ", flush=True)
+            try:
+                result = tool_executor.execute("segment_phrase", {"text_prompt": category})
+                if result.success and result.data.get("num_masks", 0) > 0:
+                    print(f"✓ {result.data.get('num_masks', 0)} masks")
+                else:
+                    print(f"- 0 masks")
+            except Exception as e:
+                print(f"error: {e}")
+
+        # Get SAM3 masks
+        sam3_masks = tool_executor.get_all_masks()
+
+        # Combine Qwen detections with SAM3 masks
+        detections = []
+        if sam3_masks:
+            for mask in sam3_masks:
+                detections.append({
+                    'label': mask.category,
+                    'bbox': mask.bbox,
+                    'confidence': mask.score,
+                    'mask': mask.mask,
+                })
+            print(f"\nSAM3 found {len(sam3_masks)} precise masks")
+        else:
+            # Fallback to Qwen detections if SAM3 fails
+            detections = qwen_detections
+            print(f"\nUsing Qwen detections: {len(detections)}")
 
         # Filter by user categories if specified
         if self.config.categories and detections:
@@ -212,7 +255,7 @@ class InfrastructureDetectionAgentCore:
                 message="No infrastructure issues detected"
             )
 
-        print(f"\nTotal found: {len(detections)} objects")
+        print(f"\nTotal: {len(detections)} objects")
 
         # Colors for CATEGORY_GROUPS
         colors = {
@@ -279,8 +322,25 @@ class InfrastructureDetectionAgentCore:
                 detection_id += 1
                 x1, y1, x2, y2 = det['bbox']
                 confidence = det.get('confidence', 0.8)
+                mask = det.get('mask')
 
-                # Draw box
+                # Draw SAM3 mask if available (semi-transparent overlay)
+                if mask is not None:
+                    try:
+                        import numpy as np
+                        mask_overlay = Image.new('RGBA', cat_image.size, (0, 0, 0, 0))
+                        mask_array = np.array(mask)
+                        if mask_array.shape[:2] == (cat_image.height, cat_image.width):
+                            rgba_color = color + (100,)  # Semi-transparent
+                            mask_rgba = np.zeros((*mask_array.shape[:2], 4), dtype=np.uint8)
+                            mask_rgba[mask_array > 0] = rgba_color
+                            mask_img = Image.fromarray(mask_rgba, 'RGBA')
+                            cat_image = Image.alpha_composite(cat_image.convert('RGBA'), mask_img).convert('RGB')
+                            cat_draw = ImageDraw.Draw(cat_image)
+                    except Exception as e:
+                        pass  # Fallback to bbox only
+
+                # Draw bounding box
                 cat_draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
                 try:
                     text_bbox = cat_draw.textbbox((x1, y1 - 20), category, font=font)
@@ -294,11 +354,12 @@ class InfrastructureDetectionAgentCore:
                     "category": category,
                     "bbox": det['bbox'],
                     "confidence": confidence,
+                    "has_mask": mask is not None,
                 }
                 cat_data.append(det_info)
                 final_detections.append({
                     "mask_id": detection_id, "category": category, "severity": "medium",
-                    "confidence": confidence, "bbox": det['bbox'], "mask": None,
+                    "confidence": confidence, "bbox": det['bbox'], "mask": mask,
                 })
 
             # Save category image
@@ -312,10 +373,31 @@ class InfrastructureDetectionAgentCore:
 
             print(f"  ✓ {category}: {len(cat_detections)} detections -> {cat_folder}/")
 
-        # Create combined image with all detections
-        result_image = image.copy()
+        # Create combined image with all detections (masks + boxes)
+        result_image = image.copy().convert('RGBA')
+        import numpy as np
+
+        # First draw all SAM3 masks
+        for det in detections:
+            mask = det.get('mask')
+            if mask is not None:
+                try:
+                    label = det['label']
+                    color = colors.get(label, (255, 255, 0))
+                    mask_array = np.array(mask)
+                    if mask_array.shape[:2] == (image.height, image.width):
+                        rgba_color = color + (80,)  # Semi-transparent
+                        mask_rgba = np.zeros((*mask_array.shape[:2], 4), dtype=np.uint8)
+                        mask_rgba[mask_array > 0] = rgba_color
+                        mask_img = Image.fromarray(mask_rgba, 'RGBA')
+                        result_image = Image.alpha_composite(result_image, mask_img)
+                except:
+                    pass
+
+        result_image = result_image.convert('RGB')
         draw = ImageDraw.Draw(result_image)
 
+        # Then draw bounding boxes and labels
         for det in detections:
             label = det['label']
             x1, y1, x2, y2 = det['bbox']
@@ -356,28 +438,27 @@ class InfrastructureDetectionAgentCore:
         """Ask Qwen to detect - category by category for accuracy."""
         img_width, img_height = image.size
 
-        # All categories organized by group
+        # All categories with DETAILED descriptions for better detection
         CATEGORIES = {
             "road_defects": [
-                ("potholes", "holes or depressions in road pavement"),
-                ("alligator_cracks", "web-like interconnected cracks in pavement"),
-                ("longitudinal_cracks", "cracks running along the road direction"),
-                ("transverse_cracks", "cracks running across the road"),
-                ("road_surface_damage", "damaged or broken road surface"),
+                ("potholes", "holes, depressions, or cavities in road pavement - dark circular or irregular shapes in the road"),
+                ("alligator_cracks", "web-like pattern of interconnected cracks resembling alligator skin on road surface"),
+                ("longitudinal_cracks", "long cracks running parallel to the road direction"),
+                ("transverse_cracks", "cracks running perpendicular/across the road"),
+                ("road_surface_damage", "any visible damage, deterioration, or broken areas on the road surface"),
             ],
             "social_issues": [
-                ("abandoned_vehicle", "old, damaged, or abandoned cars/vehicles"),
-                ("homeless_encampment", "tents, tarps, makeshift shelters"),
-                ("homeless_person", "person sleeping or sitting on street"),
+                ("homeless_encampment", "tents, tarps, blue tarps, makeshift shelters, camping tents, fabric shelters, cardboard shelters on sidewalk or street - ANY tent or tarp structure"),
+                ("homeless_person", "person sleeping on ground, person sitting on sidewalk with belongings, person lying down on street"),
+                ("abandoned_vehicle", "old rusted car, damaged vehicle, car with flat tires, car covered in dust/dirt, vehicle that looks unused or broken down"),
             ],
             "infrastructure": [
-                ("manholes", "round metal manhole covers on road"),
-                ("damaged_paint", "faded or worn road paint markings"),
-                ("damaged_crosswalks", "faded pedestrian crossing lines"),
-                ("dumped_trash", "garbage, debris, illegally dumped items"),
-                ("street_signs", "road signs, traffic signs"),
-                ("traffic_lights", "traffic signal lights"),
-                ("tyre_marks", "tire skid marks on road"),
+                ("manholes", "round or square metal covers on road surface, utility access covers, sewer covers"),
+                ("damaged_crosswalks", "faded white lines of pedestrian crossing, worn crosswalk markings"),
+                ("dumped_trash", "garbage bags, piles of trash, illegally dumped items, debris, litter piles, discarded furniture or appliances"),
+                ("street_signs", "stop signs, speed limit signs, street name signs, warning signs, any road signage"),
+                ("traffic_lights", "traffic signal lights, red/yellow/green lights at intersections"),
+                ("tyre_marks", "black tire skid marks on road, rubber marks from vehicles"),
             ],
         }
 
@@ -397,15 +478,22 @@ class InfrastructureDetectionAgentCore:
         return all_detections
 
     def _detect_single_category(self, image: Image.Image, category: str, description: str, img_width: int, img_height: int) -> List[Dict]:
-        """Detect a single category - focused search."""
-        prompt = f"""Detect all "{category}" in this image.
-{category}: {description}
+        """Detect a single category - focused search with smart prompt."""
 
-If you see any {category}, output JSON with bounding boxes:
+        # Better prompt that forces detection
+        prompt = f"""Look carefully at this image. Find ALL instances of: {category}
+
+What to look for: {description}
+
+IMPORTANT: Look at EVERY part of the image carefully. If you see ANYTHING that matches "{category}", mark it with a bounding box.
+
+Output format - JSON array with bounding boxes in pixels:
 [{{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}]
 
-Image: {img_width}x{img_height} pixels.
-If no {category} found, return: []"""
+Image size: {img_width} x {img_height} pixels.
+x1,y1 = top-left corner. x2,y2 = bottom-right corner.
+
+If you find {category}, output the JSON. If truly nothing found, output: []"""
 
         try:
             result = self.qwen_detector.detect(image, prompt)
@@ -413,12 +501,10 @@ If no {category} found, return: []"""
                 return []
             response_text = result.get("text", "")
             detections = self._parse_json_detection_response(response_text, img_width, img_height)
-            # Filter to only this category
-            filtered = [d for d in detections if category.lower() in d['label'].lower() or d['label'].lower() in category.lower()]
-            # Force correct label
-            for d in filtered:
-                d['label'] = category
-            return filtered
+            # Accept any detection (don't filter too strictly)
+            for d in detections:
+                d['label'] = category  # Force correct label
+            return detections
         except Exception as e:
             logger.error(f"Detection error for {category}: {e}")
             return []
