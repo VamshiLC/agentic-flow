@@ -126,41 +126,44 @@ class InfrastructureDetectionAgentCore:
 
     def _run_direct_category_search(self, image: Image.Image) -> AgentResult:
         """
-        Search ALL categories with SAM3, then optionally validate with LLM.
+        SMART approach: Qwen VL detects first, then SAM3 segments.
 
-        This is the HYBRID approach:
-        1. SAM3 searches ALL 17 categories (comprehensive)
-        2. LLM validates each mask to reject false positives (smart)
+        1. Ask Qwen VL to analyze the image and identify what's actually there
+        2. Only search for categories that Qwen VL found
+        3. SAM3 segments those specific items
+        4. LLM validates each mask
         """
         start_time = time.time()
 
-        # ALL categories to search - comprehensive list
+        # If user specified categories, use those
         if self.config.categories:
             categories = self.config.categories
+            print(f"\n{'='*60}")
+            print(f"USER SPECIFIED: Searching for {categories}")
+            print(f"{'='*60}")
         else:
-            # IMPORTANT: Order matters! Search specific objects FIRST to avoid
-            # misclassification (e.g., manhole detected as pothole)
-            categories = [
-                # Infrastructure - search FIRST (these are specific objects)
-                "manhole", "manhole cover",
-                "street sign", "traffic sign", "traffic light",
-                "crosswalk", "road marking",
-                # Objects on road
-                "abandoned vehicle", "abandoned car",
-                "debris", "trash", "garbage",
-                # Encampments
-                "tent", "homeless encampment",
-                # Road defects - search LAST (these are generic damage)
-                "pothole", "alligator crack", "road crack", "pavement crack",
-                "longitudinal crack", "transverse crack", "road damage",
-                # Marks
-                "tyre mark", "skid mark"
-            ]
+            # SMART: Ask Qwen VL what's in the image first
+            print(f"\n{'='*60}")
+            print(f"STEP 1: Qwen VL analyzing image...")
+            print(f"{'='*60}")
+
+            categories = self._ask_qwen_what_to_detect(image)
+
+            if not categories:
+                # Fallback to all categories if Qwen fails
+                categories = [
+                    "manhole", "pothole", "crack", "graffiti",
+                    "abandoned vehicle", "debris", "trash",
+                    "street sign", "traffic light"
+                ]
+                print(f"Qwen analysis failed, using default categories: {categories}")
+            else:
+                print(f"Qwen found these to search: {categories}")
 
         print(f"\n{'='*60}")
-        print(f"SEARCHING ALL {len(categories)} CATEGORIES WITH SAM3")
+        print(f"STEP 2: SAM3 segmenting {len(categories)} items...")
         print(f"{'='*60}")
-        logger.info(f"=== SEARCHING ALL {len(categories)} CATEGORIES ===")
+        logger.info(f"=== SEARCHING {len(categories)} CATEGORIES ===")
 
         # Initialize tool executor
         tool_executor = ToolExecutor(self.sam3_processor, image)
@@ -328,6 +331,12 @@ PREDICTED MASK: The colored overlay shows what the segmentation model detected a
    - No significant depth
    - May have vegetation growing
 
+   GRAFFITI characteristics:
+   - SPRAY PAINT or painted text/images on walls, surfaces
+   - Has COLORS (not natural weathering)
+   - Shows LETTERS, WORDS, or ARTISTIC patterns
+   - On walls, buildings, signs, or infrastructure
+
    FALSE POSITIVES to REJECT:
    - Shadows (no physical depth, follows light direction)
    - Wet spots/puddles (reflective, no damage)
@@ -414,6 +423,71 @@ IMPORTANT: Be STRICT. Only Accept if the mask clearly shows the claimed object t
         cropped = image.crop((x1, y1, x2, y2))
 
         return cropped
+
+    def _ask_qwen_what_to_detect(self, image: Image.Image) -> List[str]:
+        """
+        Ask Qwen VL to analyze the image and tell us what infrastructure issues are present.
+        This is the SMART part - let the VLM decide what to look for.
+        """
+        analysis_prompt = """Analyze this image carefully. List ALL infrastructure issues, objects, or problems you can see.
+
+LOOK FOR:
+- Road damage: potholes (holes in road), cracks (lines/fractures in pavement), road damage
+- Infrastructure: manholes (metal covers), street signs, traffic lights, crosswalks
+- Objects: abandoned vehicles, debris, trash, garbage on road
+- Vandalism: graffiti (spray paint on walls/surfaces)
+- Encampments: tents, homeless encampments
+- Other: tyre marks, skid marks
+
+For EACH issue you see, output it as a simple phrase.
+
+OUTPUT FORMAT (one per line):
+DETECTED: [item]
+DETECTED: [item]
+...
+
+Example:
+DETECTED: manhole
+DETECTED: pothole
+DETECTED: graffiti on wall
+
+If you see NOTHING, output:
+DETECTED: none
+
+Be specific about what you actually see. Don't guess or imagine things that aren't there."""
+
+        try:
+            result = self.qwen_detector.detect(image, analysis_prompt)
+
+            if result.get("success"):
+                response = result.get("text", "")
+                print(f"Qwen response: {response[:300]}...")
+
+                # Parse detected items
+                detected = []
+                for line in response.split("\n"):
+                    line = line.strip().lower()
+                    if "detected:" in line:
+                        item = line.split("detected:")[-1].strip()
+                        if item and item != "none":
+                            detected.append(item)
+
+                # Remove duplicates and clean up
+                detected = list(set(detected))
+
+                if detected:
+                    logger.info(f"Qwen detected: {detected}")
+                    return detected
+                else:
+                    logger.warning("Qwen found nothing")
+                    return []
+            else:
+                logger.error("Qwen analysis failed")
+                return []
+
+        except Exception as e:
+            logger.error(f"Qwen analysis error: {e}")
+            return []
 
     def _parse_keep_ids(self, response: str, masks: List) -> List[int]:
         """Parse mask IDs to keep from LLM response."""

@@ -151,7 +151,7 @@ class InfrastructureDetectionAgentHF:
             debug_dir="debug",
             force_all_categories=True,  # Search categories with SAM3
             validate_with_llm=True,  # LLM validates each mask with <think> reasoning
-            confidence_threshold=0.4,  # Higher threshold to reduce initial false positives
+            confidence_threshold=0.6,  # High threshold - only keep confident detections
         )
 
         # Create and run agent
