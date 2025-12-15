@@ -657,49 +657,68 @@ What objects do you see in this image?"""
         detections = []
 
         try:
-            # Try to find JSON array in response
-            # Look for [...] pattern
-            json_match = re.search(r'\[[\s\S]*?\]', response)
-            if json_match:
-                json_str = json_match.group(0)
-                # Clean up the JSON string
-                json_str = json_str.replace("'", '"')
+            # Method 1: Try to find JSON array between ```json and ```
+            code_block_match = re.search(r'```json\s*([\s\S]*?)\s*```', response)
+            if code_block_match:
+                json_str = code_block_match.group(1).strip()
+            else:
+                # Method 2: Find the outermost [...] array (greedy match)
+                # Count brackets to find complete array
+                start_idx = response.find('[')
+                if start_idx != -1:
+                    bracket_count = 0
+                    end_idx = start_idx
+                    for i, char in enumerate(response[start_idx:], start_idx):
+                        if char == '[':
+                            bracket_count += 1
+                        elif char == ']':
+                            bracket_count -= 1
+                            if bracket_count == 0:
+                                end_idx = i + 1
+                                break
+                    json_str = response[start_idx:end_idx]
+                else:
+                    json_str = None
 
-                try:
-                    parsed = json.loads(json_str)
+            if json_str:
+                print(f"  Parsing JSON: {json_str[:200]}...")
+                parsed = json.loads(json_str)
 
-                    if isinstance(parsed, list):
-                        for item in parsed:
-                            if isinstance(item, dict):
-                                # Handle bbox_2d format (Qwen2.5-VL native)
-                                bbox = item.get('bbox_2d') or item.get('bbox') or item.get('box')
-                                label = item.get('label', 'unknown')
-                                confidence = item.get('confidence', 0.8)
+                if isinstance(parsed, list):
+                    for item in parsed:
+                        if isinstance(item, dict):
+                            # Handle bbox_2d format (Qwen2.5-VL native)
+                            bbox = item.get('bbox_2d') or item.get('bbox') or item.get('box')
+                            label = item.get('label', 'unknown')
+                            confidence = item.get('confidence', 0.8)
 
-                                if bbox and len(bbox) == 4:
-                                    x1, y1, x2, y2 = [int(b) for b in bbox]
+                            if bbox and len(bbox) == 4:
+                                x1, y1, x2, y2 = [int(float(b)) for b in bbox]
 
-                                    # Validate bbox
-                                    if x1 >= x2 or y1 >= y2:
-                                        continue
+                                # Validate bbox
+                                if x1 >= x2 or y1 >= y2:
+                                    print(f"  Skipping invalid bbox: {bbox}")
+                                    continue
 
-                                    # Clamp to image bounds
-                                    x1 = max(0, min(x1, img_width))
-                                    y1 = max(0, min(y1, img_height))
-                                    x2 = max(0, min(x2, img_width))
-                                    y2 = max(0, min(y2, img_height))
+                                # Clamp to image bounds
+                                x1 = max(0, min(x1, img_width))
+                                y1 = max(0, min(y1, img_height))
+                                x2 = max(0, min(x2, img_width))
+                                y2 = max(0, min(y2, img_height))
 
-                                    if x1 < x2 and y1 < y2:
-                                        detections.append({
-                                            'label': label.lower().strip(),
-                                            'bbox': [x1, y1, x2, y2],
-                                            'confidence': float(confidence)
-                                        })
+                                if x1 < x2 and y1 < y2:
+                                    detections.append({
+                                        'label': label.lower().strip(),
+                                        'bbox': [x1, y1, x2, y2],
+                                        'confidence': float(confidence)
+                                    })
+                                    print(f"  ✓ Parsed: {label} at [{x1}, {y1}, {x2}, {y2}]")
 
-                except json.JSONDecodeError as e:
-                    logger.debug(f"JSON parse failed: {e}")
-
+        except json.JSONDecodeError as e:
+            print(f"  JSON parse error: {e}")
+            logger.debug(f"JSON parse failed: {e}")
         except Exception as e:
+            print(f"  Parse error: {e}")
             logger.debug(f"JSON detection parsing failed: {e}")
 
         return detections
