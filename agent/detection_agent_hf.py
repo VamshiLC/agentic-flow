@@ -151,8 +151,8 @@ class InfrastructureDetectionAgentHF:
             debug=self.debug,
             debug_dir="debug",
             force_all_categories=True,  # Use smart detection flow
-            validate_with_llm=False,  # Not needed - Qwen bbox detection is accurate
-            confidence_threshold=0.6,  # High threshold - only keep confident detections
+            validate_with_llm=True,  # Enable validation to filter manholes vs potholes, shadows
+            confidence_threshold=0.5,  # Medium threshold
             optimize_memory=True,  # Clear Qwen before SAM3 for better GPU usage
         )
 

@@ -48,7 +48,7 @@ class AgentConfig:
     prune_after_turns: int = 20  # Prune messages after N turns
     auto_exit_on_masks: bool = False  # Let LLM decide when done
     force_all_categories: bool = True  # Search ALL categories directly with SAM3
-    validate_with_llm: bool = False  # Skip slow LLM validation
+    validate_with_llm: bool = True  # Enable LLM validation to filter false positives
     confidence_threshold: float = 0.25  # Lower threshold to catch more
     optimize_memory: bool = True  # Clear Qwen from GPU before SAM3 segmentation
 
@@ -231,10 +231,21 @@ class InfrastructureDetectionAgentCore:
         # Get all accumulated masks
         masks = tool_executor.get_current_masks()
 
+        # LLM VALIDATION - Filter out false positives (manholes as potholes, shadows, etc)
+        if masks and self.config.validate_with_llm:
+            print(f"\n{'='*60}")
+            print(f"Step 3: LLM validating {len(masks)} detections...")
+            print(f"{'='*60}")
+            # Reload Qwen to GPU for validation
+            if self.config.optimize_memory:
+                self._reload_qwen_to_gpu()
+            masks = self._validate_masks_with_llm(image, masks, tool_executor)
+            print(f"After validation: {len(masks)} masks kept")
+
         # Build final detections
         if masks:
             print(f"\n{'='*60}")
-            print(f"Step 3: Rendering {len(masks)} masks on image...")
+            print(f"Step 4: Rendering {len(masks)} masks on image...")
             print(f"{'='*60}")
 
             detections = [
