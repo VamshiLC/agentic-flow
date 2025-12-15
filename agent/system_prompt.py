@@ -12,6 +12,7 @@ INFRASTRUCTURE_CATEGORIES = {
     # Critical (Red - High Priority)
     "potholes": "Holes or depressions in the road pavement surface",
     "alligator_cracks": "Web-like interconnected cracks resembling alligator skin pattern",
+    "graffiti": "Spray paint, tags, or vandalism on walls and surfaces",
 
     # Medium Priority (Yellow)
     "abandoned_vehicles": "Derelict or abandoned vehicles on or near the road",

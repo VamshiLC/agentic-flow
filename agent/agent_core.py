@@ -201,9 +201,10 @@ class InfrastructureDetectionAgentCore:
 
         if not found_items:
             print("Qwen didn't identify any infrastructure issues.")
-            print("Falling back to searching all categories with SAM3...")
-            # Fallback: search common infrastructure items
-            found_items = ['graffiti', 'pothole', 'crack', 'manhole']
+            print("Falling back to searching ALL categories with SAM3...")
+            # Fallback: search ALL infrastructure categories
+            from .system_prompt import get_categories
+            found_items = list(get_categories().keys())
 
         # MEMORY OPTIMIZATION: Clear Qwen from GPU before SAM3 segmentation
         if self.config.optimize_memory:
