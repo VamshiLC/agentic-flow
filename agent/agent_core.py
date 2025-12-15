@@ -218,16 +218,20 @@ class InfrastructureDetectionAgentCore:
         result_image = image.copy()
         draw = ImageDraw.Draw(result_image)
 
+        # Colors for exact 12 categories from system_prompt.py
         colors = {
-            'pothole': (255, 0, 0),       # Red
-            'crack': (255, 165, 0),        # Orange
-            'manhole': (0, 255, 0),        # Green
-            'graffiti': (255, 0, 255),     # Magenta
-            'trash': (139, 69, 19),        # Brown
-            'tent': (0, 255, 255),         # Cyan
-            'car': (0, 0, 255),            # Blue
-            'sign': (255, 255, 0),         # Yellow
-            'crosswalk': (128, 128, 255),  # Light blue
+            'pothole': (255, 0, 0),           # Red - Critical
+            'crack': (255, 100, 0),           # Orange-Red - Critical
+            'graffiti': (255, 0, 255),        # Magenta - Critical
+            'tent': (0, 255, 255),            # Cyan - High
+            'car': (0, 0, 255),               # Blue - High
+            'illegal dumping': (128, 0, 128), # Purple - High
+            'trash': (139, 69, 19),           # Brown - Medium
+            'blocked sidewalk': (255, 165, 0),# Orange - Medium
+            'manhole': (0, 255, 0),           # Green - Infrastructure
+            'damaged sign': (255, 255, 0),    # Yellow - Infrastructure
+            'damaged light': (255, 200, 0),   # Gold - Infrastructure
+            'damaged crosswalk': (200, 200, 255), # Light blue - Infrastructure
         }
 
         try:
@@ -272,33 +276,39 @@ class InfrastructureDetectionAgentCore:
         )
 
     def _ask_qwen_to_detect_with_boxes(self, image: Image.Image) -> List[Dict]:
-        """Ask Qwen to detect infrastructure issues with bounding boxes."""
+        """Ask Qwen to detect infrastructure issues with bounding boxes - SMART detection."""
         img_width, img_height = image.size
 
-        prompt = f"""You are an expert infrastructure inspector. Carefully analyze this image and detect ALL objects from these categories:
+        # Use exact categories from system_prompt.py
+        prompt = f"""<|im_start|>system
+You are an expert urban infrastructure inspector AI. Your job is to identify problems and objects in street images.
+<|im_end|>
+<|im_start|>user
+Analyze this image carefully. Find and locate ALL instances of these 12 categories:
 
-CATEGORIES TO DETECT:
-- pothole: Holes, depressions, damage in road surface
-- crack: Cracks, fractures in pavement or walls
-- manhole: Manhole covers, drain grates, utility covers on ground
-- graffiti: Spray paint, tags, markings on walls/surfaces
-- trash: Garbage, litter, debris, dumped items
-- tent: Tents, tarps, makeshift shelters, encampments
-- car: Vehicles (parked cars, trucks, vans)
-- sign: Street signs, traffic signs, any signage
-- crosswalk: Pedestrian crossings, road markings
+1. pothole - Holes or depressions in road pavement
+2. crack - Cracks in road pavement or sidewalk
+3. graffiti - Spray paint, tags, vandalism on walls/surfaces
+4. tent - Tents, encampments, tarps, homeless shelters
+5. car - Vehicles (cars, trucks, vans) on or near road
+6. illegal dumping - Large items dumped on street (furniture, appliances)
+7. trash - Litter, garbage, debris on road/sidewalk
+8. blocked sidewalk - Objects blocking pedestrian path
+9. manhole - Manhole covers, utility covers on road
+10. damaged sign - Broken, bent, or defaced street signs
+11. damaged light - Broken street lights
+12. damaged crosswalk - Faded crosswalk markings
 
-IMPORTANT: Detect EVERYTHING you see from these categories. Be thorough!
+For EACH object you find, provide precise bounding box coordinates.
 
-Return a JSON array with bounding boxes in pixels:
-[
-  {{"label": "category_name", "bbox_2d": [x1, y1, x2, y2]}}
-]
+Output format - JSON array only:
+[{{"label": "category", "bbox_2d": [x1, y1, x2, y2]}}]
 
-Image dimensions: {img_width} x {img_height} pixels.
-Coordinates must be within image bounds.
-
-If truly NOTHING from the categories exists, return: []"""
+Image size: {img_width}x{img_height}. All coordinates must be within bounds.
+Return [] if nothing found.
+<|im_end|>
+<|im_start|>assistant
+"""
 
         try:
             result = self.qwen_detector.detect(image, prompt)
