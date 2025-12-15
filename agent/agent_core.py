@@ -12,6 +12,7 @@ Based on: https://github.com/facebookresearch/sam3/blob/main/sam3/agent/agent_co
 """
 import os
 import torch
+import numpy as np
 from PIL import Image
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
@@ -197,42 +198,100 @@ class InfrastructureDetectionAgentCore:
         print(f"-" * 40)
         qwen_detections = self._ask_qwen_to_detect_with_boxes(image)
 
-        # STEP 2: SAM3 segments each unique category
-        print(f"\n[STEP 2] SAM3 SEGMENTATION")
+        if not qwen_detections:
+            print("Qwen found nothing.")
+            return AgentResult(
+                success=True, detections=[], num_detections=0,
+                final_image=image, turns_taken=1,
+                message="No infrastructure issues detected"
+            )
+
+        print(f"\nQwen found {len(qwen_detections)} objects")
+
+        # STEP 2: SAM3 segments EACH Qwen detection using bbox center as point prompt
+        print(f"\n[STEP 2] SAM3 SEGMENTATION (Guided by Qwen bbox centers)")
         print(f"-" * 40)
 
-        # Get unique categories from Qwen detections
-        categories_found = list(set(d['label'] for d in qwen_detections))
-
-        for category in categories_found:
-            print(f"  Segmenting: {category}...", end=" ", flush=True)
-            try:
-                result = tool_executor.execute("segment_phrase", {"text_prompt": category})
-                if result.success and result.data.get("num_masks", 0) > 0:
-                    print(f"✓ {result.data.get('num_masks', 0)} masks")
-                else:
-                    print(f"- 0 masks")
-            except Exception as e:
-                print(f"error: {e}")
-
-        # Get SAM3 masks
-        sam3_masks = tool_executor.get_all_masks()
-
-        # Combine Qwen detections with SAM3 masks
         detections = []
-        if sam3_masks:
-            for mask in sam3_masks:
+        img_height, img_width = self.original_image_size if hasattr(self, 'original_image_size') else (image.size[1], image.size[0])
+
+        for i, qwen_det in enumerate(qwen_detections):
+            category = qwen_det['label']
+            bbox = qwen_det['bbox']
+            x1, y1, x2, y2 = bbox
+
+            # Calculate center point of Qwen's bbox to guide SAM3
+            center_x = (x1 + x2) // 2
+            center_y = (y1 + y2) // 2
+
+            print(f"  [{i+1}/{len(qwen_detections)}] {category} at [{x1},{y1},{x2},{y2}]...", end=" ", flush=True)
+
+            try:
+                # Use SAM3 point prompt at center of Qwen's bbox
+                # set_point_prompt expects: state, point (list of [x,y]), labels (list of 1=fg/0=bg)
+                output = self.sam3_processor.set_point_prompt(
+                    state=tool_executor.inference_state,
+                    point=[[center_x, center_y]],
+                    labels=[1]  # 1 = foreground
+                )
+
+                mask = None
+                if output:
+                    # Extract mask from SAM3 output
+                    if isinstance(output, dict):
+                        raw_masks = output.get('masks', [])
+                        if raw_masks:
+                            mask_data = raw_masks[0]
+                            if hasattr(mask_data, 'cpu'):
+                                mask = mask_data.cpu().numpy()
+                            else:
+                                mask = np.array(mask_data)
+                            if mask.ndim > 2:
+                                mask = mask.squeeze()
+                    elif hasattr(output, 'masks') and output.masks:
+                        mask_data = output.masks[0]
+                        if hasattr(mask_data, 'cpu'):
+                            mask = mask_data.cpu().numpy()
+                        else:
+                            mask = np.array(mask_data)
+                        if mask.ndim > 2:
+                            mask = mask.squeeze()
+
+                # Crop mask to bbox region only (SAM3 may segment beyond bbox)
+                if mask is not None:
+                    cropped_mask = np.zeros_like(mask, dtype=np.uint8)
+                    cropped_mask[y1:y2, x1:x2] = (mask[y1:y2, x1:x2] > 0.5).astype(np.uint8) * 255
+                    mask = cropped_mask
+
+                if mask is not None and np.any(mask):
+                    detections.append({
+                        'label': category,
+                        'bbox': bbox,
+                        'confidence': qwen_det.get('confidence', 0.8),
+                        'mask': mask,
+                    })
+                    print(f"✓ mask")
+                else:
+                    # Fallback: use Qwen bbox without mask
+                    detections.append({
+                        'label': category,
+                        'bbox': bbox,
+                        'confidence': qwen_det.get('confidence', 0.8),
+                        'mask': None,
+                    })
+                    print(f"- no mask (using bbox)")
+
+            except Exception as e:
+                # Fallback: use Qwen detection without SAM3 mask
                 detections.append({
-                    'label': mask.category,
-                    'bbox': mask.bbox,
-                    'confidence': mask.score,
-                    'mask': mask.mask,
+                    'label': category,
+                    'bbox': bbox,
+                    'confidence': qwen_det.get('confidence', 0.8),
+                    'mask': None,
                 })
-            print(f"\nSAM3 found {len(sam3_masks)} precise masks")
-        else:
-            # Fallback to Qwen detections if SAM3 fails
-            detections = qwen_detections
-            print(f"\nUsing Qwen detections: {len(detections)}")
+                print(f"- error: {str(e)[:30]}")
+
+        print(f"\nTotal: {len(detections)} detections")
 
         # Filter by user categories if specified
         if self.config.categories and detections:
