@@ -200,11 +200,10 @@ class InfrastructureDetectionAgentCore:
         found_items = self._ask_qwen_what_it_sees(image)
 
         if not found_items:
-            print("Qwen didn't identify any infrastructure issues.")
-            print("Falling back to searching ALL categories with SAM3...")
-            # Fallback: search ALL infrastructure categories
-            from .system_prompt import get_categories
-            found_items = list(get_categories().keys())
+            print("Qwen didn't identify any specific issues.")
+            print("Falling back to basic search...")
+            # Fallback: search only common issues (not everything)
+            found_items = ['pothole', 'manhole', 'graffiti']
 
         # MEMORY OPTIMIZATION: Clear Qwen from GPU before SAM3 segmentation
         if self.config.optimize_memory:
@@ -588,30 +587,20 @@ Describe everything visible."""
             print(f"Qwen says: {response}")
 
             # Extract what Qwen found - map to search terms
+            # BE SPECIFIC - don't match generic words
             found_items = []
             keywords = {
-                # Graffiti
+                # Graffiti - specific terms
                 'graffiti': 'graffiti',
                 'spray paint': 'graffiti',
-                'vandal': 'graffiti',
-                'mural': 'graffiti',
-                # Road damage
+                'vandalism': 'graffiti',
+                # Road damage - specific terms only
                 'pothole': 'pothole',
-                'hole': 'pothole',
-                'crack': 'crack',
-                # Manholes
+                'potholes': 'pothole',
+                # Don't trigger on "cracked" - too generic
+                # Manholes - specific
                 'manhole': 'manhole',
-                'metal cover': 'manhole',
-                'grate': 'manhole',
-                'drain': 'manhole',
-                # Debris
-                'debris': 'debris',
-                'trash': 'trash',
-                'garbage': 'trash',
-                # Signs and lights
-                'sign': 'sign',
-                'traffic light': 'traffic light',
-                'street light': 'street light',
+                'manhole cover': 'manhole',
             }
 
             for keyword, label in keywords.items():

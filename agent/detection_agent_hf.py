@@ -151,8 +151,8 @@ class InfrastructureDetectionAgentHF:
             debug=self.debug,
             debug_dir="debug",
             force_all_categories=True,  # Use smart detection flow
-            validate_with_llm=True,  # Enable validation to filter manholes vs potholes, shadows
-            confidence_threshold=0.5,  # Medium threshold
+            validate_with_llm=False,  # Disable slow validation - use high confidence instead
+            confidence_threshold=0.8,  # HIGH threshold to reduce false positives
             optimize_memory=True,  # Clear Qwen before SAM3 for better GPU usage
         )
 
