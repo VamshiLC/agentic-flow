@@ -582,35 +582,42 @@ IMPORTANT: Be STRICT. Only Accept if the mask clearly shows the claimed object t
         # Get image dimensions for coordinate validation
         width, height = image.size
 
-        # TRUE VISUAL INTELLIGENCE - Let the model SEE and DECIDE
-        detection_prompt = f"""You are a visual inspection AI. Look at this image and tell me what you see.
+        # ROAD INFRASTRUCTURE INSPECTION - Focus ONLY on issues that need attention
+        detection_prompt = f"""You are a ROAD INFRASTRUCTURE INSPECTOR. Your job is to find PROBLEMS and ISSUES that need repair or attention.
 
 IMAGE SIZE: {width} x {height} pixels
 
-YOUR TASK: Examine this image carefully and identify ANY objects, issues, or notable items you can see. This includes but is not limited to:
-- Road damage (potholes, cracks)
-- Infrastructure (manholes, signs, lights)
-- Vandalism or graffiti
-- Debris or trash
-- Any other notable objects
+DETECT ONLY THESE INFRASTRUCTURE ISSUES:
+1. POTHOLES - holes or depressions in the road surface
+2. CRACKS - fractures, splits, or damage in pavement
+3. GRAFFITI - spray paint, tags, vandalism on walls/surfaces
+4. MANHOLES - circular metal covers in the road (for maintenance tracking)
+5. DEBRIS - trash, fallen objects, obstructions on road
+6. DAMAGED SIGNS - broken, bent, or defaced traffic signs
+7. DAMAGED LIGHTS - broken street lights or traffic lights
+8. ROAD MARKINGS - faded or damaged lane markings
 
-For each object you identify, provide:
-1. What it is (label)
-2. Where it is (bounding box coordinates)
-3. How confident you are (0.0-1.0)
+DO NOT DETECT: cars, vehicles, people, trees, buildings, sky, normal objects.
+ONLY detect infrastructure ISSUES and PROBLEMS.
 
-OUTPUT FORMAT - JSON array:
+For each issue found, provide bounding box coordinates in pixels.
+
+OUTPUT FORMAT:
 ```json
 [
-  {{"bbox_2d": [x1, y1, x2, y2], "label": "what_you_see", "confidence": 0.9}}
+  {{"bbox_2d": [x1, y1, x2, y2], "label": "issue_type", "confidence": 0.9}}
 ]
 ```
 
-Where x1,y1 is top-left corner and x2,y2 is bottom-right corner in pixels.
+Where x1,y1 is top-left and x2,y2 is bottom-right in pixels (0 to {width} for x, 0 to {height} for y).
 
-IMPORTANT: Just describe what you actually SEE in the image. Don't make things up. If you see spray paint or text on a wall, report it. If you see a hole in the road, report it. Be specific about what you observe.
+If you see spray paint or writing on a wall = report as "graffiti"
+If you see a hole in the road = report as "pothole"
+If you see a round metal cover = report as "manhole"
 
-What objects do you see in this image?"""
+Return ONLY infrastructure issues. Return empty array [] if no issues found.
+
+What infrastructure issues do you see?"""
 
         try:
             result = self.qwen_detector.detect(image, detection_prompt)
