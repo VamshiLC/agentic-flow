@@ -577,6 +577,80 @@ IMPORTANT: Be STRICT. Only Accept if the mask clearly shows the claimed object t
         detections = self._ask_qwen_to_detect_with_boxes(image)
         return [d['label'] for d in detections]
 
+    def _ask_qwen_to_detect_with_boxes(self, image: Image.Image) -> List[Dict]:
+        """
+        GROUNDING DETECTION: Ask Qwen to find objects AND their bounding boxes.
+
+        This is the KEY method for accurate detection - Qwen provides:
+        1. What object it found (label)
+        2. WHERE it is (bounding box coordinates)
+
+        Then SAM3 can segment those specific regions instead of blind text search.
+
+        Returns:
+            List of dicts: [{"label": "car", "bbox": [x1,y1,x2,y2], "confidence": 0.9}, ...]
+        """
+        img_width, img_height = image.size
+
+        # Use Qwen2.5-VL's grounding detection capability
+        grounding_prompt = """Analyze this image and detect ALL infrastructure issues and objects of concern.
+
+For EACH issue or object you find, provide the bounding box coordinates.
+
+IMPORTANT CATEGORIES TO DETECT:
+- potholes (holes in road surface)
+- cracks (lines/damage in pavement)
+- manholes (circular metal covers on road)
+- graffiti (spray paint on walls/surfaces)
+- trash/debris (garbage, litter)
+- tents/encampments (homeless camps, tarps, sleeping areas)
+- abandoned vehicles (cars that look abandoned, damaged, or parked illegally)
+- damaged signs (broken, bent, or defaced road signs)
+- blocked sidewalks (obstructions on walkways)
+
+OUTPUT FORMAT - Return a JSON array:
+```json
+[
+  {"label": "pothole", "bbox_2d": [x1, y1, x2, y2]},
+  {"label": "car", "bbox_2d": [x1, y1, x2, y2]},
+  {"label": "tent", "bbox_2d": [x1, y1, x2, y2]}
+]
+```
+
+Where x1,y1 is top-left corner and x2,y2 is bottom-right corner in PIXELS.
+Image size is {width}x{height} pixels.
+
+If NO issues found, return: []
+
+Detect EVERYTHING visible. Be thorough.""".format(width=img_width, height=img_height)
+
+        try:
+            result = self.qwen_detector.detect(image, grounding_prompt)
+
+            if not result.get("success"):
+                logger.error("Qwen grounding detection failed")
+                return []
+
+            response = result.get("text", "")
+            print(f"Qwen grounding response: {response[:500]}...")
+
+            # Parse the JSON response
+            detections = self._parse_json_detection_response(response, img_width, img_height)
+
+            if detections:
+                print(f"Qwen found {len(detections)} objects with bboxes:")
+                for det in detections:
+                    print(f"  - {det['label']} at {det['bbox']}")
+            else:
+                print("Qwen found no objects (empty response)")
+
+            return detections
+
+        except Exception as e:
+            logger.error(f"Qwen grounding error: {e}")
+            print(f"Qwen grounding error: {e}")
+            return []
+
     def _ask_qwen_what_it_sees(self, image: Image.Image) -> List[str]:
         """
         SIMPLE: Ask Qwen what infrastructure issues it sees.
