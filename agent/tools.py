@@ -273,17 +273,26 @@ class ToolExecutor:
             try:
                 mask_np = None
 
-                # Method 1: Use SAM3 TEXT PROMPT (BEST quality - semantic understanding)
-                # Try multiple label variations for better SAM3 text matching
+                # Method 1: Use SAM3 TEXT PROMPT DIRECTLY (BEST quality!)
+                # This gives the nice segmentation like sam3.png
+                # Don't constrain to bbox - let SAM3 find the full object
                 label_variants = self._get_sam3_friendly_labels(label)
 
                 for variant in label_variants:
-                    mask_np = self._segment_with_text_and_bbox(variant, bbox)
+                    mask_np = self._segment_with_text_prompt_full(variant, bbox)
                     if mask_np is not None and mask_np.any():
                         print(f"(text:'{variant}') ", end="")
                         break
 
-                # Method 2: Use SAM3 box/point prompts if text failed
+                # Method 2: If text prompt failed, try with bbox constraint
+                if mask_np is None or not mask_np.any():
+                    for variant in label_variants:
+                        mask_np = self._segment_with_text_and_bbox(variant, bbox)
+                        if mask_np is not None and mask_np.any():
+                            print(f"(text+bbox:'{variant}') ", end="")
+                            break
+
+                # Method 3: Use SAM3 box/point prompts as last resort
                 if mask_np is None or not mask_np.any():
                     mask_np = self._segment_box_with_sam3(bbox)
 
@@ -308,6 +317,101 @@ class ToolExecutor:
 
         print(f"  Total: {len(masks)} masks generated")
         return masks
+
+    def _segment_with_text_prompt_full(self, label: str, bbox: List[int]) -> np.ndarray:
+        """
+        Use SAM3 text prompt DIRECTLY for best segmentation quality.
+
+        This is exactly how sam3.png gets nice segmentation:
+        1. Call SAM3 with text prompt
+        2. Get ALL masks SAM3 finds
+        3. Pick the mask that overlaps most with Qwen's bbox
+
+        Args:
+            label: Text prompt for SAM3
+            bbox: [x1, y1, x2, y2] bounding box from Qwen (used to pick best mask)
+
+        Returns:
+            numpy array mask (FULL segmentation, not cropped!)
+        """
+        try:
+            x1, y1, x2, y2 = bbox
+            h, w = self.original_image.size[1], self.original_image.size[0]
+
+            # Call SAM3 text prompt - this is what gives nice segmentation
+            output = self.sam3_processor.set_text_prompt(
+                state=self.inference_state,
+                prompt=label
+            )
+
+            if not output:
+                return None
+
+            # Extract masks from output
+            raw_masks = []
+            scores = []
+
+            if isinstance(output, dict):
+                raw_masks = output.get('masks', [])
+                scores = output.get('scores', [])
+            elif hasattr(output, 'masks'):
+                raw_masks = output.masks
+                scores = getattr(output, 'scores', [])
+
+            if not raw_masks:
+                return None
+
+            # Find mask with BEST overlap with Qwen's bbox
+            best_mask = None
+            best_overlap_score = 0
+
+            for i, mask in enumerate(raw_masks):
+                # Convert to numpy
+                if hasattr(mask, 'cpu'):
+                    mask_np = mask.cpu().numpy()
+                else:
+                    mask_np = np.array(mask)
+
+                if mask_np.ndim > 2:
+                    mask_np = mask_np.squeeze()
+
+                # Ensure correct shape
+                if mask_np.shape[0] != h or mask_np.shape[1] != w:
+                    continue
+
+                # Calculate overlap with bbox
+                mask_binary = (mask_np > 0.5)
+                bbox_region = mask_binary[y1:y2, x1:x2]
+                overlap_pixels = np.sum(bbox_region)
+                bbox_area = (y2 - y1) * (x2 - x1)
+
+                # Calculate overlap ratio
+                if bbox_area > 0:
+                    overlap_ratio = overlap_pixels / bbox_area
+
+                    # Also check SAM3 confidence score
+                    sam_score = 1.0
+                    if scores and i < len(scores):
+                        s = scores[i]
+                        sam_score = s.item() if hasattr(s, 'item') else float(s)
+
+                    # Combined score: overlap * confidence
+                    combined_score = overlap_ratio * sam_score
+
+                    if combined_score > best_overlap_score:
+                        best_overlap_score = combined_score
+                        best_mask = mask_np
+
+            # Return the FULL mask (not cropped to bbox!)
+            # This gives nice segmentation like sam3.png
+            if best_mask is not None and best_overlap_score > 0.1:
+                return (best_mask > 0.5).astype(np.uint8) * 255
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"SAM3 text prompt failed for '{label}': {e}")
+            return None
 
     def _get_sam3_friendly_labels(self, label: str) -> List[str]:
         """
