@@ -149,7 +149,7 @@ def list_categories():
 
 
 def process_image_mode(args, model, processor):
-    """Process single image."""
+    """Process single image and organize by category."""
     print("\n" + "="*60)
     print("SAM3-ONLY IMAGE DETECTION")
     print("="*60)
@@ -171,43 +171,104 @@ def process_image_mode(args, model, processor):
     print(f"\nProcessing: {args.input}")
     result = frame_processor.process_image(args.input)
 
+    # Load original image
+    original_image = cv2.imread(str(args.input))
+    if original_image is None:
+        from PIL import Image
+        original_image = np.array(Image.open(args.input).convert('RGB'))
+        original_image = cv2.cvtColor(original_image, cv2.COLOR_RGB2BGR)
+
     # Print summary
     print(f"\n{'='*60}")
     print(f"RESULTS")
     print(f"{'='*60}")
-    print(f"Detections: {result['num_detections']}")
+    print(f"Total Detections: {result['num_detections']}")
 
+    # Organize detections by category
     if result['detections']:
-        # Group by category
-        category_counts = {}
+        detections_by_category = {}
         for det in result['detections']:
             cat = det['category']
-            category_counts[cat] = category_counts.get(cat, 0) + 1
+            if cat not in detections_by_category:
+                detections_by_category[cat] = []
+            detections_by_category[cat].append(det)
 
-        print("\nBy category:")
-        for cat, count in sorted(category_counts.items()):
-            print(f"  {cat}: {count}")
+        print(f"\nDetections by category:")
+        for cat, dets in sorted(detections_by_category.items()):
+            print(f"  {cat}: {len(dets)}")
 
-    # Save outputs
-    input_path = Path(args.input)
-    base_name = input_path.stem
+        # Save detections organized by category
+        input_path = Path(args.input)
+        base_name = input_path.stem
 
-    # Save JSON
-    json_path = output_dir / f"{base_name}_sam3_detections.json"
-    save_json_output(result, json_path)
-    print(f"\n✓ Saved JSON: {json_path}")
+        for category, category_dets in detections_by_category.items():
+            # Create category folder structure
+            category_dir = output_dir / category
+            category_dir.mkdir(parents=True, exist_ok=True)
+            frames_dir = category_dir / "frames"
+            frames_dir.mkdir(exist_ok=True)
+            annotated_dir = category_dir / "annotated"
+            annotated_dir.mkdir(exist_ok=True)
+            crops_dir = category_dir / "crops"
+            crops_dir.mkdir(exist_ok=True)
 
-    # Visualize
-    if not args.no_viz and result['detections']:
-        viz_path = output_dir / f"{base_name}_sam3_annotated.jpg"
-        visualize_detections(args.input, result['detections'], viz_path)
-        print(f"✓ Saved visualization: {viz_path}")
+            # Save original image with detection
+            frame_path = frames_dir / f"{base_name}.jpg"
+            cv2.imwrite(str(frame_path), original_image)
+
+            # Save annotated image with only this category
+            annotated_image = draw_stylish_detections(
+                image=original_image.copy(),
+                detections=category_dets,
+                show_masks=True,
+            )
+            annotated_path = annotated_dir / f"{base_name}_detected.jpg"
+            cv2.imwrite(str(annotated_path), annotated_image)
+
+            # Save cropped detections
+            for idx, det in enumerate(category_dets):
+                bbox = det.get('bbox', [])
+                if len(bbox) == 4:
+                    x1, y1, x2, y2 = map(int, bbox)
+                    # Add padding
+                    pad = 10
+                    h, w = original_image.shape[:2]
+                    x1 = max(0, x1 - pad)
+                    y1 = max(0, y1 - pad)
+                    x2 = min(w, x2 + pad)
+                    y2 = min(h, y2 + pad)
+
+                    crop = original_image[y1:y2, x1:x2]
+                    crop_path = crops_dir / f"{base_name}_crop_{idx:03d}.jpg"
+                    cv2.imwrite(str(crop_path), crop)
+
+            # Save category-specific JSON
+            json_path = category_dir / "detections.json"
+            category_result = {
+                "category": category,
+                "image_path": str(args.input),
+                "image_name": base_name,
+                "detection_time": datetime.now().isoformat(),
+                "num_detections": len(category_dets),
+                "detections": [{k: v for k, v in d.items() if k != 'mask'} for d in category_dets]
+            }
+            with open(json_path, 'w') as f:
+                json.dump(category_result, f, indent=2)
+
+            print(f"\n✓ {category}:")
+            print(f"  - Original: {frame_path}")
+            print(f"  - Annotated: {annotated_path}")
+            print(f"  - Crops: {len(category_dets)} saved to {crops_dir}")
+            print(f"  - JSON: {json_path}")
+
+    else:
+        print("\nNo detections found.")
 
     print(f"\n{'='*60}\n")
 
 
 def process_video_mode(args, model, processor):
-    """Process video."""
+    """Process video and organize by category."""
     print("\n" + "="*60)
     print("SAM3-ONLY VIDEO DETECTION")
     print("="*60)
@@ -232,6 +293,11 @@ def process_video_mode(args, model, processor):
         max_frames=args.max_frames,
     )
 
+    # Open video to extract frames
+    cap = cv2.VideoCapture(str(args.input))
+    video_fps = cap.get(cv2.CAP_PROP_FPS) or result['fps']
+    video_name = Path(args.input).stem
+
     # Print summary
     print(f"\n{'='*60}")
     print(f"RESULTS")
@@ -241,33 +307,102 @@ def process_video_mode(args, model, processor):
     print(f"Total detections: {result['num_detections']}")
 
     if result['detections']:
-        # Group by category
-        category_counts = {}
+        # Group detections by category and frame
+        detections_by_category = {}
         for det in result['detections']:
             cat = det['category']
-            category_counts[cat] = category_counts.get(cat, 0) + 1
+            if cat not in detections_by_category:
+                detections_by_category[cat] = {}
+            frame_num = det['frame_number']
+            if frame_num not in detections_by_category[cat]:
+                detections_by_category[cat][frame_num] = []
+            detections_by_category[cat][frame_num].append(det)
 
-        print("\nBy category:")
-        for cat, count in sorted(category_counts.items(), key=lambda x: -x[1]):
-            print(f"  {cat}: {count}")
+        print(f"\nDetections by category:")
+        for cat in sorted(detections_by_category.keys()):
+            frames_count = len(detections_by_category[cat])
+            dets_count = sum(len(dets) for dets in detections_by_category[cat].values())
+            print(f"  {cat}: {dets_count} detections in {frames_count} frames")
 
-        # Frame coverage
-        frames_with_detections = len(set(d['frame_number'] for d in result['detections']))
-        print(f"\nFrames with detections: {frames_with_detections}/{result['total_frames']}")
+        # Save detections organized by category
+        for category, frames_dict in detections_by_category.items():
+            # Create category folder structure
+            category_dir = output_dir / category
+            category_dir.mkdir(parents=True, exist_ok=True)
+            frames_dir = category_dir / "frames"
+            frames_dir.mkdir(exist_ok=True)
+            annotated_dir = category_dir / "annotated"
+            annotated_dir.mkdir(exist_ok=True)
 
-    # Save JSON
-    video_name = Path(args.input).stem
-    json_path = output_dir / f"{video_name}_sam3_detections.json"
-    save_json_output(result, json_path)
-    print(f"\n✓ Saved JSON: {json_path}")
+            category_detections = []
 
-    # Create annotated video
-    if not args.no_viz and result['detections']:
-        print(f"\nCreating annotated video...")
-        video_path = output_dir / f"{video_name}_sam3_annotated.mp4"
-        create_annotated_video(args.input, result, video_path)
-        print(f"✓ Saved annotated video: {video_path}")
+            # Extract and save only frames with this category
+            for frame_num, frame_dets in frames_dict.items():
+                # Seek to frame
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
+                ret, frame = cap.read()
+                if not ret:
+                    continue
 
+                # Save original frame
+                frame_path = frames_dir / f"frame_{frame_num:06d}.jpg"
+                cv2.imwrite(str(frame_path), frame)
+
+                # Save annotated frame (only this category)
+                annotated_frame = draw_stylish_detections(
+                    image=frame.copy(),
+                    detections=frame_dets,
+                    show_masks=True,
+                )
+                annotated_path = annotated_dir / f"frame_{frame_num:06d}_detected.jpg"
+                cv2.imwrite(str(annotated_path), annotated_frame)
+
+                # Store detection info
+                category_detections.append({
+                    "frame_index": frame_num,
+                    "timestamp": frame_num / video_fps,
+                    "frame_path": str(frame_path),
+                    "annotated_path": str(annotated_path),
+                    "detections": [{k: v for k, v in d.items() if k != 'mask'} for d in frame_dets]
+                })
+
+            # Save category-specific JSON
+            json_path = category_dir / "detections.json"
+            category_result = {
+                "category": category,
+                "video_path": str(args.input),
+                "video_name": video_name,
+                "detection_time": datetime.now().isoformat(),
+                "total_frames_processed": result['total_frames'],
+                "frames_with_detections": len(frames_dict),
+                "total_detections": sum(len(dets) for dets in frames_dict.values()),
+                "fps": result['fps'],
+                "detections": category_detections
+            }
+            with open(json_path, 'w') as f:
+                json.dump(category_result, f, indent=2)
+
+            print(f"\n✓ {category}:")
+            print(f"  - Frames: {len(frames_dict)} saved to {frames_dir}")
+            print(f"  - Annotated: {len(frames_dict)} saved to {annotated_dir}")
+            print(f"  - JSON: {json_path}")
+
+        # Save overall summary
+        summary_path = output_dir / "summary.json"
+        summary = {}
+        for cat, frames_dict in detections_by_category.items():
+            summary[cat] = {
+                "frames_with_detections": len(frames_dict),
+                "total_detections": sum(len(dets) for dets in frames_dict.values())
+            }
+        with open(summary_path, 'w') as f:
+            json.dump(summary, f, indent=2)
+        print(f"\n✓ Summary: {summary_path}")
+
+    else:
+        print("\nNo detections found.")
+
+    cap.release()
     print(f"\n{'='*60}\n")
 
 
