@@ -432,7 +432,31 @@ Examples:
   # Force CPU usage
   python main_simple.py --mode image --input frame.jpg --device cpu
 
-Note: All processing now uses the agentic pipeline (Qwen3-VL for detection + SAM3 for segmentation)
+  # ===== Few-Shot Exemplar Examples =====
+
+  # Use exemplars from default library (assets/exemplars/)
+  python main_simple.py --mode image --input frame.jpg
+
+  # Add runtime exemplar (show the model what a pothole looks like)
+  python main_simple.py --mode image --input frame.jpg --exemplar potholes:/path/to/pothole_example.jpg
+
+  # Multiple runtime exemplars
+  python main_simple.py --mode image --input frame.jpg \\
+      --exemplar potholes:pothole1.jpg \\
+      --exemplar potholes:pothole2.jpg \\
+      --exemplar cracks:crack_example.jpg
+
+  # Custom exemplar directory
+  python main_simple.py --mode image --input frame.jpg --exemplar-dir /my/exemplars/
+
+  # Use contrastive strategy (shows positive AND negative examples)
+  python main_simple.py --mode image --input frame.jpg --exemplar-strategy contrastive
+
+  # Disable exemplars (text-only detection)
+  python main_simple.py --mode image --input frame.jpg --no-exemplars
+
+Note: All processing uses the agentic pipeline (Qwen3-VL for detection + SAM3 for segmentation)
+      Few-shot exemplars improve accuracy by showing the model reference images.
         """
     )
 
@@ -495,6 +519,38 @@ Note: All processing now uses the agentic pipeline (Qwen3-VL for detection + SAM
         help="Skip saving annotated video (faster, JSON only)"
     )
 
+    # ===== Exemplar (Few-Shot) Arguments =====
+    parser.add_argument(
+        "--exemplar-dir",
+        type=str,
+        default="assets/exemplars",
+        help="Directory containing exemplar library (default: assets/exemplars)"
+    )
+    parser.add_argument(
+        "--exemplar",
+        action="append",
+        metavar="CATEGORY:PATH",
+        dest="exemplars",
+        help="Add runtime exemplar. Format: category:/path/to/image.jpg. Can be repeated."
+    )
+    parser.add_argument(
+        "--no-exemplars",
+        action="store_true",
+        help="Disable exemplar-based detection (use text-only prompts)"
+    )
+    parser.add_argument(
+        "--exemplar-strategy",
+        choices=["visual_context", "contrastive", "description"],
+        default="visual_context",
+        help="Exemplar prompting strategy for Qwen3-VL (default: visual_context)"
+    )
+    parser.add_argument(
+        "--max-exemplars",
+        type=int,
+        default=3,
+        help="Maximum exemplars per category to use (default: 3)"
+    )
+
     args = parser.parse_args()
 
     # Validate input
@@ -502,8 +558,43 @@ Note: All processing now uses the agentic pipeline (Qwen3-VL for detection + SAM
         print(f"Error: Input file not found: {args.input}")
         return 1
 
+    # Initialize exemplar manager (if not disabled)
+    exemplar_manager = None
+    if not args.no_exemplars:
+        try:
+            from exemplar import ExemplarManager
+            exemplar_manager = ExemplarManager(
+                library_dir=args.exemplar_dir,
+                auto_load=True
+            )
+
+            # Add runtime exemplars from CLI
+            if args.exemplars:
+                for exemplar_arg in args.exemplars:
+                    if ":" not in exemplar_arg:
+                        print(f"Warning: Invalid exemplar format '{exemplar_arg}', expected CATEGORY:PATH")
+                        continue
+                    category, path = exemplar_arg.split(":", 1)
+                    exemplar_manager.add_runtime_exemplar(
+                        category=category.strip(),
+                        image_path=path.strip()
+                    )
+
+            stats = exemplar_manager.get_stats()
+            if stats["total_exemplars"] > 0:
+                print(f"\nExemplar library loaded: {stats['total_exemplars']} exemplars across {stats['categories_with_exemplars']} categories")
+            else:
+                print("\nNo exemplars found in library (text-only detection will be used)")
+
+        except ImportError:
+            print("\nWarning: Exemplar module not available, using text-only detection")
+            exemplar_manager = None
+        except Exception as e:
+            print(f"\nWarning: Failed to load exemplars: {e}")
+            exemplar_manager = None
+
     # Initialize detector
-    print("="*70)
+    print("\n" + "="*70)
     print("ASH INFRASTRUCTURE DETECTION - AGENTIC PIPELINE (Qwen3-VL + SAM3)")
     print("="*70)
     print(f"Model: {args.model}")
@@ -511,6 +602,10 @@ Note: All processing now uses the agentic pipeline (Qwen3-VL for detection + SAM
     print(f"Pipeline: Qwen3-VL detection + SAM3 segmentation")
     print(f"Quantization: {'Enabled (8-bit)' if args.quantize else 'Disabled'}")
     print(f"Low memory mode: {'Enabled' if args.low_memory else 'Disabled'}")
+    print(f"Few-shot exemplars: {'Enabled' if exemplar_manager else 'Disabled'}")
+    if exemplar_manager:
+        print(f"Exemplar strategy: {args.exemplar_strategy}")
+        print(f"Max exemplars per category: {args.max_exemplars}")
     if args.mode == "video" and args.batch_size > 1:
         print(f"Batch processing: Enabled (batch size: {args.batch_size})")
 
@@ -520,7 +615,10 @@ Note: All processing now uses the agentic pipeline (Qwen3-VL for detection + SAM
             categories=args.categories,
             device=args.device,
             use_quantization=args.quantize,
-            low_memory=args.low_memory
+            low_memory=args.low_memory,
+            exemplar_manager=exemplar_manager,
+            exemplar_strategy=args.exemplar_strategy,
+            max_exemplars=args.max_exemplars
         )
     except Exception as e:
         print(f"\nError loading detector: {e}")

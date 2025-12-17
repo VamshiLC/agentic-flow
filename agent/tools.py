@@ -51,6 +51,7 @@ class ToolExecutor:
     - SAM3 calls for segmentation
     - Mask storage and rendering
     - Detection result compilation
+    - Few-shot exemplar-based segmentation
     """
 
     # Color palette for mask visualization (RGB)
@@ -67,17 +68,19 @@ class ToolExecutor:
         (255, 0, 128),    # Rose
     ]
 
-    def __init__(self, sam3_processor, image: Image.Image):
+    def __init__(self, sam3_processor, image: Image.Image, exemplar_segmenter=None):
         """
         Initialize tool executor.
 
         Args:
             sam3_processor: Loaded SAM3 processor
             image: PIL Image to process
+            exemplar_segmenter: Optional SAM3ExemplarSegmenter for few-shot segmentation
         """
         self.sam3_processor = sam3_processor
         self.original_image = image.convert('RGB')
         self.image_size = image.size  # (width, height)
+        self.exemplar_segmenter = exemplar_segmenter
 
         # State tracking
         self.masks: List[MaskData] = []
@@ -114,6 +117,7 @@ class ToolExecutor:
         """
         tool_map = {
             "segment_phrase": self._segment_phrase,
+            "segment_with_exemplars": self._segment_with_exemplars,
             "examine_each_mask": self._examine_each_mask,
             "select_masks_and_return": self._select_masks_and_return,
             "report_no_mask": self._report_no_mask,
@@ -227,6 +231,119 @@ class ToolExecutor:
                 tool_name="segment_phrase",
                 message=f"SAM3 error: {str(e)}",
             )
+
+    def _segment_with_exemplars(self, params: Dict[str, Any]) -> ToolResult:
+        """
+        Execute segment_with_exemplars tool - use exemplar-based segmentation.
+
+        This tool leverages few-shot learning by using reference images (exemplars)
+        to guide SAM3's segmentation. It's particularly useful for:
+        - Domain-specific objects not well-represented in SAM3's training
+        - Reducing false positives by learning from negative exemplars
+        - Improving accuracy on specific defect patterns
+
+        Args:
+            params: {
+                "category": "potholes",  # Category to segment
+                "max_exemplars": 3,      # Optional: max exemplars to use
+                "use_semantic": True     # Optional: use semantic predictor mode
+            }
+
+        Returns:
+            ToolResult with masks and rendered image
+        """
+        category = params.get("category", "").strip()
+
+        if not category:
+            return ToolResult(
+                success=False,
+                tool_name="segment_with_exemplars",
+                message="Error: category is required",
+            )
+
+        # Check if exemplar segmenter is available
+        if self.exemplar_segmenter is None:
+            logger.warning(f"Exemplar segmenter not available, falling back to text prompt")
+            # Fallback to standard text-based segmentation
+            return self._segment_phrase({"text_prompt": category})
+
+        try:
+            max_exemplars = params.get("max_exemplars", 3)
+            use_semantic = params.get("use_semantic", True)
+
+            # Call exemplar segmenter
+            results = self.exemplar_segmenter.segment_with_exemplars(
+                target_image=self.original_image,
+                category=category,
+                use_semantic_predictor=use_semantic,
+                max_exemplars=max_exemplars
+            )
+
+            if not results:
+                return ToolResult(
+                    success=True,
+                    tool_name="segment_with_exemplars",
+                    message=f"Exemplar segmentation found 0 masks for '{category}'. Try segment_phrase instead.",
+                    data={"num_masks": 0, "category": category, "used_exemplars": True},
+                )
+
+            # Convert results to MaskData and add to storage
+            start_id = len(self.masks) + 1
+            added_count = 0
+
+            for i, result in enumerate(results):
+                mask_np = result.get("mask")
+                if mask_np is None:
+                    continue
+
+                # Check for duplicates
+                temp_mask = MaskData(
+                    mask_id=0,
+                    mask=mask_np,
+                    score=result.get("confidence", 0.8),
+                    bbox=result.get("bbox", [0, 0, 0, 0]),
+                    category=category,
+                    text_prompt=f"exemplar:{category}"
+                )
+
+                if self._is_duplicate_mask(temp_mask):
+                    logger.debug(f"Skipping duplicate exemplar mask for '{category}'")
+                    continue
+
+                mask_data = MaskData(
+                    mask_id=start_id + added_count,
+                    mask=mask_np,
+                    score=result.get("confidence", 0.8),
+                    bbox=result.get("bbox", [0, 0, 0, 0]),
+                    category=category,
+                    text_prompt=f"exemplar:{category}"
+                )
+                self.masks.append(mask_data)
+                added_count += 1
+
+            # Render masks on image
+            rendered_image = self._render_masks(self.masks)
+            self.current_mask_image = rendered_image
+
+            return ToolResult(
+                success=True,
+                tool_name="segment_with_exemplars",
+                message=f"Exemplar segmentation found {added_count} mask(s) for '{category}'. Total masks: {len(self.masks)}",
+                data={
+                    "num_masks": added_count,
+                    "total_masks": len(self.masks),
+                    "category": category,
+                    "used_exemplars": True,
+                    "mask_ids": [m.mask_id for m in self.masks[-added_count:]] if added_count > 0 else [],
+                },
+                image=rendered_image,
+            )
+
+        except Exception as e:
+            logger.error(f"Exemplar segmentation failed: {e}", exc_info=True)
+            # Fallback to standard text-based segmentation
+            logger.info(f"Falling back to text-based segmentation for '{category}'")
+            return self._segment_phrase({"text_prompt": category})
 
     def segment_from_boxes(self, detections: List[Dict]) -> List:
         """

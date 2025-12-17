@@ -49,7 +49,10 @@ class InfrastructureDetectionAgentHF:
         low_memory: bool = False,
         sam3_confidence: float = 0.25,
         max_turns: int = 10,  # Fast detection
-        debug: bool = False
+        debug: bool = False,
+        exemplar_manager=None,
+        exemplar_strategy: str = "visual_context",
+        max_exemplars: int = 3
     ):
         """
         Initialize the agentic detector.
@@ -64,6 +67,9 @@ class InfrastructureDetectionAgentHF:
             sam3_confidence: Confidence threshold for SAM3 segmentation
             max_turns: Maximum agentic loop iterations
             debug: Enable debug logging
+            exemplar_manager: ExemplarManager instance for few-shot learning
+            exemplar_strategy: Prompting strategy ("visual_context", "contrastive", "description")
+            max_exemplars: Maximum exemplars per category to use
         """
         import torch
 
@@ -72,6 +78,13 @@ class InfrastructureDetectionAgentHF:
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.max_turns = max_turns
         self.debug = debug
+        self.exemplar_manager = exemplar_manager
+        self.exemplar_strategy = exemplar_strategy
+        self.max_exemplars = max_exemplars
+
+        # Initialize exemplar components if available
+        self.exemplar_prompt_builder = None
+        self.sam3_exemplar_segmenter = None
 
         print(f"\n{'='*60}")
         print("INITIALIZING AGENTIC DETECTOR (Qwen3-VL + SAM3)")
@@ -81,6 +94,10 @@ class InfrastructureDetectionAgentHF:
         print(f"  SAM3 confidence: {sam3_confidence}")
         print(f"  Max turns: {max_turns} (smart search all categories)")
         print(f"  Debug mode: {debug}")
+        if exemplar_manager:
+            stats = exemplar_manager.get_stats()
+            print(f"  Few-shot exemplars: {stats['total_exemplars']} loaded")
+            print(f"  Exemplar strategy: {exemplar_strategy}")
 
         # Load Qwen3-VL detector (the "brain")
         print("\n[1/2] Loading Qwen3-VL (Vision-Language Model)...")
@@ -102,6 +119,19 @@ class InfrastructureDetectionAgentHF:
             self.sam3_processor = sam3_processor
             print("Using pre-loaded SAM3 processor")
 
+        # Initialize exemplar components
+        if exemplar_manager:
+            try:
+                from exemplar import ExemplarPromptBuilder, SAM3ExemplarSegmenter
+                self.exemplar_prompt_builder = ExemplarPromptBuilder(exemplar_manager)
+                self.sam3_exemplar_segmenter = SAM3ExemplarSegmenter(
+                    self.sam3_processor,
+                    exemplar_manager
+                )
+                print("  Exemplar prompt builder initialized")
+            except ImportError as e:
+                logger.warning(f"Could not initialize exemplar components: {e}")
+
         print(f"\n{'='*60}")
         print("AGENTIC DETECTOR READY")
         print(f"{'='*60}\n")
@@ -117,8 +147,9 @@ class InfrastructureDetectionAgentHF:
 
         This is the main entry point for detection. It:
         1. Initializes the agent core
-        2. Runs the multi-turn agentic loop
-        3. Returns formatted detections
+        2. Optionally uses few-shot exemplars for improved detection
+        3. Runs the multi-turn agentic loop
+        4. Returns formatted detections
 
         Args:
             image: PIL Image or path to image file
@@ -142,6 +173,18 @@ class InfrastructureDetectionAgentHF:
         if user_query is None:
             user_query = "Analyze this road image and detect all infrastructure issues."
 
+        # Check if we should use exemplar-enhanced detection
+        use_exemplars = (
+            self.exemplar_manager is not None and
+            self.exemplar_prompt_builder is not None
+        )
+
+        if use_exemplars:
+            # Get categories that have exemplars
+            categories_with_exemplars = self.exemplar_manager.get_all_categories()
+            if categories_with_exemplars:
+                logger.info(f"Using few-shot exemplars for: {categories_with_exemplars}")
+
         # Create agent config - SMART mode with Qwen bbox detection
         # NEW FLOW: Qwen detects with bboxes → SAM3 segments those boxes
         # No LLM validation needed - Qwen already classified objects correctly
@@ -156,11 +199,15 @@ class InfrastructureDetectionAgentHF:
             optimize_memory=True,  # Clear Qwen before SAM3 for better GPU usage
         )
 
-        # Create and run agent
+        # Create and run agent with exemplar support
         agent = InfrastructureDetectionAgentCore(
             qwen_detector=self.qwen_detector,
             sam3_processor=self.sam3_processor,
-            config=config
+            config=config,
+            exemplar_manager=self.exemplar_manager,
+            exemplar_prompt_builder=self.exemplar_prompt_builder,
+            exemplar_strategy=self.exemplar_strategy,
+            max_exemplars=self.max_exemplars
         )
 
         # Run agentic loop
@@ -176,7 +223,8 @@ class InfrastructureDetectionAgentHF:
             'turns_taken': result.turns_taken,
             'success': result.success,
             'text_response': result.message,
-            'final_image': result.final_image
+            'final_image': result.final_image,
+            'used_exemplars': use_exemplars
         }
 
     def _format_detections(self, detections: List[Dict]) -> List[Dict]:

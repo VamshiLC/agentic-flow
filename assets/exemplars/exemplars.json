@@ -1,0 +1,87 @@
+{
+  "version": "1.0",
+  "description": "Exemplar library for few-shot infrastructure detection",
+  "last_updated": "2025-12-17",
+  "categories": {
+    "potholes": {
+      "description": "Holes or depressions in road pavement surface",
+      "severity": "critical_high",
+      "positive_exemplars": [],
+      "negative_exemplars": []
+    },
+    "alligator_cracks": {
+      "description": "Web-like interconnected cracks resembling alligator skin",
+      "severity": "critical_high",
+      "positive_exemplars": [],
+      "negative_exemplars": []
+    },
+    "longitudinal_cracks": {
+      "description": "Cracks running parallel to the road direction",
+      "severity": "non_critical_low",
+      "positive_exemplars": [],
+      "negative_exemplars": []
+    },
+    "transverse_cracks": {
+      "description": "Cracks running perpendicular to the road direction",
+      "severity": "non_critical_low",
+      "positive_exemplars": [],
+      "negative_exemplars": []
+    },
+    "manholes": {
+      "description": "Manhole covers on the road surface",
+      "severity": "non_critical_low",
+      "positive_exemplars": [],
+      "negative_exemplars": []
+    },
+    "damaged_paint": {
+      "description": "Faded or damaged road markings and paint",
+      "severity": "non_critical_low",
+      "positive_exemplars": [],
+      "negative_exemplars": []
+    },
+    "damaged_crosswalks": {
+      "description": "Faded or damaged pedestrian crosswalk markings",
+      "severity": "non_critical_low",
+      "positive_exemplars": [],
+      "negative_exemplars": []
+    },
+    "dumped_trash": {
+      "description": "Illegally dumped garbage, debris, or litter on roadway",
+      "severity": "non_critical_low",
+      "positive_exemplars": [],
+      "negative_exemplars": []
+    },
+    "street_signs": {
+      "description": "Traffic and regulatory street signs",
+      "severity": "non_critical_low",
+      "positive_exemplars": [],
+      "negative_exemplars": []
+    },
+    "traffic_lights": {
+      "description": "Traffic signal lights",
+      "severity": "non_critical_low",
+      "positive_exemplars": [],
+      "negative_exemplars": []
+    },
+    "tyre_marks": {
+      "description": "Tire skid marks on road surface",
+      "severity": "non_critical_low",
+      "positive_exemplars": [],
+      "negative_exemplars": []
+    },
+    "abandoned_vehicles": {
+      "description": "Abandoned or derelict vehicles",
+      "severity": "medium",
+      "positive_exemplars": [],
+      "negative_exemplars": []
+    }
+  },
+  "exemplar_schema": {
+    "filename": "string - Image filename in category folder",
+    "bbox": "[x1, y1, x2, y2] - Bounding box of the object in the image",
+    "description": "string - Brief description of what the exemplar shows",
+    "severity": "string - optional severity level (critical, high, medium, low)",
+    "source": "string - optional source of the exemplar (dataset name, manual, etc.)",
+    "confusion_reason": "string - For negative exemplars, why this might be confused"
+  }
+}

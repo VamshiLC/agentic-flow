@@ -74,13 +74,18 @@ class InfrastructureDetectionAgentCore:
     - Tool calling (segment_phrase, examine_each_mask, etc.)
     - Iterative refinement
     - Message pruning
+    - Few-shot exemplar learning support
     """
 
     def __init__(
         self,
         qwen_detector,
         sam3_processor,
-        config: Optional[AgentConfig] = None
+        config: Optional[AgentConfig] = None,
+        exemplar_manager=None,
+        exemplar_prompt_builder=None,
+        exemplar_strategy: str = "visual_context",
+        max_exemplars: int = 3
     ):
         """
         Initialize the agent core.
@@ -89,10 +94,20 @@ class InfrastructureDetectionAgentCore:
             qwen_detector: Loaded Qwen3VLDirectDetector instance
             sam3_processor: Loaded SAM3 processor
             config: Agent configuration
+            exemplar_manager: ExemplarManager instance for few-shot learning
+            exemplar_prompt_builder: ExemplarPromptBuilder for multi-image prompts
+            exemplar_strategy: Strategy for exemplar prompting ("visual_context", "contrastive", "description")
+            max_exemplars: Maximum exemplars per category to use
         """
         self.qwen_detector = qwen_detector
         self.sam3_processor = sam3_processor
         self.config = config or AgentConfig()
+
+        # Few-shot exemplar support
+        self.exemplar_manager = exemplar_manager
+        self.exemplar_prompt_builder = exemplar_prompt_builder
+        self.exemplar_strategy = exemplar_strategy
+        self.max_exemplars = max_exemplars
 
         # Debug logger
         self.debug_logger = DebugLogger(
@@ -100,6 +115,9 @@ class InfrastructureDetectionAgentCore:
             output_dir=self.config.debug_dir
         )
 
+        if exemplar_manager:
+            stats = exemplar_manager.get_stats()
+            logger.info(f"Agent initialized with {stats['total_exemplars']} exemplars, strategy={exemplar_strategy}")
         logger.info(f"Agent initialized with max_turns={self.config.max_turns}")
 
     def _optimize_memory_before_sam3(self):
@@ -547,7 +565,23 @@ class InfrastructureDetectionAgentCore:
         return all_detections
 
     def _detect_single_category(self, image: Image.Image, category: str, description: str, img_width: int, img_height: int) -> List[Dict]:
-        """Detect a single category."""
+        """Detect a single category, using exemplars if available."""
+
+        # Check if we should use exemplar-enhanced detection
+        use_exemplars = (
+            self.exemplar_manager is not None and
+            self.exemplar_prompt_builder is not None and
+            self.exemplar_manager.has_exemplars(category)
+        )
+
+        if use_exemplars:
+            return self._detect_with_exemplars(image, category, description, img_width, img_height)
+
+        # Standard text-only detection
+        return self._detect_with_text_only(image, category, description, img_width, img_height)
+
+    def _detect_with_text_only(self, image: Image.Image, category: str, description: str, img_width: int, img_height: int) -> List[Dict]:
+        """Standard detection using text prompts only (no exemplars)."""
 
         # Special STRICT prompt for potholes only (to avoid false positives)
         if category == "potholes":
@@ -596,6 +630,109 @@ If you find {category}, output the JSON. If nothing found, output: []"""
         except Exception as e:
             logger.error(f"Detection error for {category}: {e}")
             return []
+
+    def _detect_with_exemplars(self, image: Image.Image, category: str, description: str, img_width: int, img_height: int) -> List[Dict]:
+        """
+        Enhanced detection using few-shot exemplars.
+
+        Uses exemplar images as visual context for improved detection accuracy.
+        The LLM sees reference images showing "this is what a {category} looks like"
+        before analyzing the target image.
+
+        Args:
+            image: Target image to analyze
+            category: Category to detect (e.g., "potholes")
+            description: Text description of the category
+            img_width: Image width in pixels
+            img_height: Image height in pixels
+
+        Returns:
+            List of detections with bboxes
+        """
+        try:
+            logger.info(f"Using exemplar-enhanced detection for '{category}'")
+
+            # Build multi-image prompt with exemplars
+            prompt_data = self.exemplar_prompt_builder.build_detection_prompt(
+                category=category,
+                target_image=image,
+                strategy=self.exemplar_strategy,
+                max_exemplars=self.max_exemplars,
+                include_negative=True
+            )
+
+            if not prompt_data.get("success"):
+                # Fallback to text-only detection
+                logger.warning(f"Failed to build exemplar prompt for '{category}', using text-only")
+                return self._detect_with_text_only(image, category, description, img_width, img_height)
+
+            # Enhance the prompt with image size info and JSON output format
+            base_prompt = prompt_data.get("prompt", "")
+            enhanced_prompt = f"""{base_prompt}
+
+IMAGE SIZE: {img_width} x {img_height} pixels.
+
+OUTPUT FORMAT - Return JSON array with bounding boxes:
+[{{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}]
+
+x1,y1 = top-left corner. x2,y2 = bottom-right corner.
+If you find {category} matching the exemplars, output the JSON. If nothing found, output: []"""
+
+            # Check if we have the multi-image detection method
+            if hasattr(self.qwen_detector, 'detect_with_messages'):
+                # Use the multi-image message format
+                messages = prompt_data.get("messages", [])
+                if messages:
+                    # Update the last message with enhanced prompt
+                    for msg in reversed(messages):
+                        if msg.get("role") == "user":
+                            content = msg.get("content", [])
+                            for item in content:
+                                if item.get("type") == "text":
+                                    item["text"] = enhanced_prompt
+                                    break
+                            break
+
+                    result = self.qwen_detector.detect_with_messages(messages)
+                else:
+                    # Fallback to standard detection
+                    result = self.qwen_detector.detect(image, enhanced_prompt)
+            elif hasattr(self.qwen_detector, 'detect_with_exemplars'):
+                # Use exemplar-aware detection
+                exemplar_images = prompt_data.get("exemplar_images", [])
+                exemplar_descriptions = prompt_data.get("exemplar_descriptions", [])
+
+                result = self.qwen_detector.detect_with_exemplars(
+                    target_image=image,
+                    exemplar_images=exemplar_images,
+                    prompt=enhanced_prompt,
+                    exemplar_descriptions=exemplar_descriptions
+                )
+            else:
+                # Fallback: use standard detection with enhanced prompt
+                result = self.qwen_detector.detect(image, enhanced_prompt)
+
+            if not result.get("success"):
+                logger.warning(f"Exemplar detection failed for '{category}', trying text-only")
+                return self._detect_with_text_only(image, category, description, img_width, img_height)
+
+            response_text = result.get("text", "")
+            detections = self._parse_json_detection_response(response_text, img_width, img_height)
+
+            # Force correct label
+            for d in detections:
+                d['label'] = category
+                d['used_exemplars'] = True
+
+            if detections:
+                logger.info(f"Exemplar detection found {len(detections)} {category}")
+
+            return detections
+
+        except Exception as e:
+            logger.error(f"Exemplar detection error for {category}: {e}")
+            # Fallback to text-only detection
+            return self._detect_with_text_only(image, category, description, img_width, img_height)
 
     def _parse_json_detection_response(self, response: str, img_width: int, img_height: int) -> List[Dict]:
         """Parse JSON detection response from Qwen."""
@@ -1446,7 +1583,11 @@ def run_agent_inference(
     sam3_processor,
     categories: Optional[List[str]] = None,
     debug: bool = False,
-    output_dir: str = "output"
+    output_dir: str = "output",
+    exemplar_manager=None,
+    exemplar_prompt_builder=None,
+    exemplar_strategy: str = "visual_context",
+    max_exemplars: int = 3
 ) -> AgentResult:
     """
     Convenience function to run agent inference on an image.
@@ -1458,6 +1599,10 @@ def run_agent_inference(
         categories: Categories to detect (default: all)
         debug: Enable debug logging
         output_dir: Output directory for debug files
+        exemplar_manager: ExemplarManager for few-shot learning
+        exemplar_prompt_builder: ExemplarPromptBuilder for multi-image prompts
+        exemplar_strategy: Strategy for exemplar prompting
+        max_exemplars: Maximum exemplars per category
 
     Returns:
         AgentResult with detections
@@ -1476,7 +1621,11 @@ def run_agent_inference(
     agent = InfrastructureDetectionAgentCore(
         qwen_detector=qwen_detector,
         sam3_processor=sam3_processor,
-        config=config
+        config=config,
+        exemplar_manager=exemplar_manager,
+        exemplar_prompt_builder=exemplar_prompt_builder,
+        exemplar_strategy=exemplar_strategy,
+        max_exemplars=max_exemplars
     )
 
     result = agent.run(image)

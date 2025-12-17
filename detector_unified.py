@@ -65,6 +65,7 @@ class UnifiedInfrastructureDetector:
     This detector uses:
     - Qwen3-VL-4B-Instruct: Vision-language model for detection
     - SAM3: Segment Anything Model 3 for precise segmentation masks
+    - Optional: Few-shot exemplar learning for improved accuracy
     """
 
     def __init__(
@@ -73,7 +74,10 @@ class UnifiedInfrastructureDetector:
         categories: Optional[List[str]] = None,
         device: Optional[str] = None,
         use_quantization: bool = False,
-        low_memory: bool = False
+        low_memory: bool = False,
+        exemplar_manager=None,
+        exemplar_strategy: str = "visual_context",
+        max_exemplars: int = 3
     ):
         """
         Initialize agentic detector with Qwen3-VL + SAM3.
@@ -84,9 +88,15 @@ class UnifiedInfrastructureDetector:
             device: Device to use ("cuda", "cpu", or None for auto-detect)
             use_quantization: Use 8-bit quantization (reduces memory by ~50%)
             low_memory: Enable low memory optimizations
+            exemplar_manager: ExemplarManager instance for few-shot learning
+            exemplar_strategy: Prompting strategy ("visual_context", "contrastive", "description")
+            max_exemplars: Maximum exemplars per category to use
         """
         self.model_name = model_name
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.exemplar_manager = exemplar_manager
+        self.exemplar_strategy = exemplar_strategy
+        self.max_exemplars = max_exemplars
 
         # Set categories
         if categories is None:
@@ -98,6 +108,10 @@ class UnifiedInfrastructureDetector:
         print(f"  Model: {model_name}")
         print(f"  Categories: {len(self.categories)}")
         print(f"  Device: {self.device}")
+        if exemplar_manager:
+            stats = exemplar_manager.get_stats()
+            print(f"  Few-shot exemplars: {stats['total_exemplars']} loaded")
+            print(f"  Exemplar strategy: {exemplar_strategy}")
 
         # Load agentic detector (Qwen3-VL + SAM3)
         from agent.detection_agent_hf import InfrastructureDetectionAgentHF
@@ -108,7 +122,10 @@ class UnifiedInfrastructureDetector:
             categories=self.categories,
             device=device,
             use_quantization=use_quantization,
-            low_memory=low_memory
+            low_memory=low_memory,
+            exemplar_manager=exemplar_manager,
+            exemplar_strategy=exemplar_strategy,
+            max_exemplars=max_exemplars
         )
 
     def detect_infrastructure(

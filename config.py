@@ -37,6 +37,35 @@ class Config:
     OUTPUT_FRAMES_DIR = "frames"
     OUTPUT_DETECTIONS_DIR = "detections"
 
+    # ===== Exemplar Configuration (Few-Shot Learning) =====
+    EXEMPLAR_DIR = os.getenv("EXEMPLAR_DIR", "assets/exemplars")
+    EXEMPLAR_METADATA_FILE = "exemplars.json"
+
+    # Exemplar prompting settings
+    MAX_EXEMPLARS_PER_CATEGORY = int(os.getenv("MAX_EXEMPLARS", "5"))
+    EXEMPLAR_STRATEGY = os.getenv("EXEMPLAR_STRATEGY", "visual_context")  # visual_context, contrastive, description
+    USE_NEGATIVE_EXEMPLARS = os.getenv("USE_NEGATIVE_EXEMPLARS", "true").lower() == "true"
+    EXEMPLAR_AUTO_LOAD = os.getenv("EXEMPLAR_AUTO_LOAD", "true").lower() == "true"
+
+    # Per-category exemplar settings (can override global settings)
+    EXEMPLAR_SETTINGS = {
+        "potholes": {
+            "max_exemplars": 5,
+            "use_negative": True,
+            "priority": "high"
+        },
+        "alligator_cracks": {
+            "max_exemplars": 5,
+            "use_negative": True,
+            "priority": "high"
+        },
+        "manholes": {
+            "max_exemplars": 3,
+            "use_negative": False,
+            "priority": "medium"
+        }
+    }
+
     # ===== Detection Categories =====
     # All 12 infrastructure categories with metadata
     CATEGORIES = {
@@ -159,6 +188,22 @@ class Config:
     def get_color(cls, category):
         """Get color for a category"""
         return cls.CATEGORIES.get(category, {}).get("color", "green")
+
+    @classmethod
+    def get_exemplar_settings(cls, category):
+        """Get exemplar settings for a category (with fallback to defaults)"""
+        defaults = {
+            "max_exemplars": cls.MAX_EXEMPLARS_PER_CATEGORY,
+            "use_negative": cls.USE_NEGATIVE_EXEMPLARS,
+            "priority": "normal"
+        }
+        category_settings = cls.EXEMPLAR_SETTINGS.get(category, {})
+        return {**defaults, **category_settings}
+
+    @classmethod
+    def get_exemplar_dir(cls):
+        """Get the exemplar directory path"""
+        return cls.EXEMPLAR_DIR
 
 
 class SageMakerConfig(Config):

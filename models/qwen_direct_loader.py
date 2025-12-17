@@ -216,6 +216,230 @@ class Qwen3VLDirectDetector:
                 "error": str(e)
             }
 
+    def detect_with_exemplars(
+        self,
+        target_image: Union[Image.Image, str],
+        exemplar_images: List[Image.Image],
+        prompt: str,
+        exemplar_descriptions: Optional[List[str]] = None,
+        max_new_tokens: int = 1024
+    ) -> Dict[str, Any]:
+        """
+        Run detection with exemplar images as visual context.
+
+        Qwen3-VL supports multi-image input natively. This method shows
+        exemplar images first (as "this is what to look for") then asks
+        the model to find similar objects in the target image.
+
+        Args:
+            target_image: Image to analyze (PIL Image or path)
+            exemplar_images: List of exemplar images showing what to detect
+            prompt: Detection prompt (will be appended after exemplars)
+            exemplar_descriptions: Optional descriptions for each exemplar
+            max_new_tokens: Max tokens to generate
+
+        Returns:
+            dict: {
+                "text": response_text,
+                "raw_output": raw_response,
+                "success": bool,
+                "num_exemplars": int
+            }
+
+        Example:
+            >>> exemplars = [Image.open("pothole_example1.jpg"), Image.open("pothole_example2.jpg")]
+            >>> result = detector.detect_with_exemplars(
+            ...     target_image="road.jpg",
+            ...     exemplar_images=exemplars,
+            ...     prompt="Find all objects similar to the examples shown above."
+            ... )
+        """
+        try:
+            # Load target image if path provided
+            if isinstance(target_image, str):
+                target_image = Image.open(target_image).convert('RGB')
+
+            # Ensure all exemplar images are PIL Images
+            loaded_exemplars = []
+            for img in exemplar_images:
+                if isinstance(img, str):
+                    loaded_exemplars.append(Image.open(img).convert('RGB'))
+                elif img is not None:
+                    loaded_exemplars.append(img)
+
+            if not loaded_exemplars:
+                # No exemplars, fall back to regular detection
+                logger.warning("No valid exemplar images, falling back to regular detection")
+                return self.detect(target_image, prompt, max_new_tokens)
+
+            # Build multi-image content
+            content = []
+
+            # Add exemplar images with descriptions
+            descriptions = exemplar_descriptions or []
+            for i, ex_img in enumerate(loaded_exemplars):
+                content.append({"type": "image", "image": ex_img})
+
+                # Add description for this exemplar
+                if i < len(descriptions) and descriptions[i]:
+                    desc_text = f"[Example {i+1}] {descriptions[i]}"
+                else:
+                    desc_text = f"[Example {i+1}] Reference image showing what to look for."
+                content.append({"type": "text", "text": desc_text})
+
+            # Add target image
+            content.append({"type": "image", "image": target_image})
+
+            # Add the main prompt
+            content.append({"type": "text", "text": f"[Target Image]\n{prompt}"})
+
+            # Build message
+            messages = [{"role": "user", "content": content}]
+
+            # Apply chat template
+            text = self.processor.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True
+            )
+
+            # Collect all images in order
+            all_images = loaded_exemplars + [target_image]
+
+            # Process inputs
+            inputs = self.processor(
+                text=[text],
+                images=all_images,
+                padding=True,
+                return_tensors="pt"
+            )
+
+            # Move inputs to device
+            if self.use_quantization:
+                inputs = inputs.to("cuda")
+            else:
+                inputs = inputs.to(self.device)
+
+            # Generate
+            with torch.no_grad():
+                generated_ids = self.model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                    pad_token_id=self.tokenizer.pad_token_id
+                )
+
+            # Decode
+            generated_ids_trimmed = [
+                out_ids[len(in_ids):]
+                for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+            ]
+
+            response = self.tokenizer.batch_decode(
+                generated_ids_trimmed,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False
+            )[0]
+
+            # Clear GPU cache if in low memory mode
+            if self.low_memory and self.device == "cuda":
+                torch.cuda.empty_cache()
+
+            return {
+                "text": response,
+                "raw_output": response,
+                "success": True,
+                "num_exemplars": len(loaded_exemplars)
+            }
+
+        except Exception as e:
+            logger.error(f"Error during exemplar detection: {e}")
+            return {
+                "text": "",
+                "raw_output": "",
+                "success": False,
+                "error": str(e),
+                "num_exemplars": 0
+            }
+
+    def detect_with_messages(
+        self,
+        messages: List[Dict[str, Any]],
+        images: List[Image.Image],
+        max_new_tokens: int = 1024
+    ) -> Dict[str, Any]:
+        """
+        Run detection with pre-built messages (for ExemplarPromptBuilder).
+
+        Args:
+            messages: HuggingFace format messages with content list
+            images: List of all images in order they appear in messages
+            max_new_tokens: Max tokens to generate
+
+        Returns:
+            dict: Detection result
+        """
+        try:
+            # Apply chat template
+            text = self.processor.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True
+            )
+
+            # Process inputs
+            inputs = self.processor(
+                text=[text],
+                images=images,
+                padding=True,
+                return_tensors="pt"
+            )
+
+            # Move to device
+            if self.use_quantization:
+                inputs = inputs.to("cuda")
+            else:
+                inputs = inputs.to(self.device)
+
+            # Generate
+            with torch.no_grad():
+                generated_ids = self.model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                    pad_token_id=self.tokenizer.pad_token_id
+                )
+
+            # Decode
+            generated_ids_trimmed = [
+                out_ids[len(in_ids):]
+                for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+            ]
+
+            response = self.tokenizer.batch_decode(
+                generated_ids_trimmed,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False
+            )[0]
+
+            if self.low_memory and self.device == "cuda":
+                torch.cuda.empty_cache()
+
+            return {
+                "text": response,
+                "raw_output": response,
+                "success": True
+            }
+
+        except Exception as e:
+            logger.error(f"Error during message-based detection: {e}")
+            return {
+                "text": "",
+                "raw_output": "",
+                "success": False,
+                "error": str(e)
+            }
+
     def batch_detect(
         self,
         images: List[Union[Image.Image, str]],
