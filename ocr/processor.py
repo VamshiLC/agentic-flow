@@ -26,7 +26,6 @@ def process_image(
     image_path: str,
     output_dir: str,
     ocr_agent: Optional[LicensePlateOCR] = None,
-    use_sam3: bool = True,
     save_annotated: bool = True,
     save_json: bool = True,
     use_quantization: bool = False
@@ -38,7 +37,6 @@ def process_image(
         image_path: Path to input image
         output_dir: Output directory for results
         ocr_agent: Optional pre-initialized OCR agent
-        use_sam3: Generate segmentation masks
         save_annotated: Save annotated image
         save_json: Save JSON results
         use_quantization: Use 8-bit quantization
@@ -60,7 +58,7 @@ def process_image(
     print(f"\nProcessing: {image_path}")
 
     # Run detection + OCR
-    result = ocr_agent.detect_and_read(image, use_sam3=use_sam3)
+    result = ocr_agent.detect_and_read(image)
 
     # Print results
     print(f"Found {result['num_plates']} plate(s)")
@@ -81,15 +79,11 @@ def process_image(
 
     # Save JSON results
     if save_json:
-        # Remove masks from JSON (too large)
         json_result = {
             'image': str(image_path),
             'num_plates': result['num_plates'],
-            'plates': []
+            'plates': result['plates']
         }
-        for plate in result['plates']:
-            plate_data = {k: v for k, v in plate.items() if k != 'mask'}
-            json_result['plates'].append(plate_data)
 
         json_path = output_dir / f"{image_name}_plates.json"
         with open(json_path, 'w') as f:
@@ -104,7 +98,6 @@ def process_video(
     output_dir: str,
     target_fps: float = 1.0,
     ocr_agent: Optional[LicensePlateOCR] = None,
-    use_sam3: bool = True,
     save_frames: bool = True,
     save_video: bool = True,
     save_json: bool = True,
@@ -118,7 +111,6 @@ def process_video(
         output_dir: Output directory for results
         target_fps: Target processing FPS (e.g., 1.0 = 1 frame/second)
         ocr_agent: Optional pre-initialized OCR agent
-        use_sam3: Generate segmentation masks
         save_frames: Save individual annotated frames
         save_video: Save annotated video
         save_json: Save JSON results
@@ -190,7 +182,7 @@ def process_video(
             pil_image = Image.fromarray(frame_rgb)
 
             # Run OCR
-            result = ocr_agent.detect_and_read(pil_image, use_sam3=use_sam3)
+            result = ocr_agent.detect_and_read(pil_image)
 
             # Store results
             frame_result = {
@@ -293,7 +285,6 @@ def process_batch_images(
     image_paths: List[str],
     output_dir: str,
     ocr_agent: Optional[LicensePlateOCR] = None,
-    use_sam3: bool = True,
     use_quantization: bool = False
 ) -> List[Dict]:
     """
@@ -303,7 +294,6 @@ def process_batch_images(
         image_paths: List of image paths
         output_dir: Output directory
         ocr_agent: Optional pre-initialized agent
-        use_sam3: Generate masks
         use_quantization: Use quantization
 
     Returns:
@@ -326,7 +316,6 @@ def process_batch_images(
             image_path=image_path,
             output_dir=output_dir,
             ocr_agent=ocr_agent,
-            use_sam3=use_sam3,
             save_annotated=True,
             save_json=False  # Save combined JSON at end
         )

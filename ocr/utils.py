@@ -16,22 +16,19 @@ from PIL import Image
 # Colors for drawing (BGR format for OpenCV)
 PLATE_COLOR = (0, 165, 255)  # Orange
 PLATE_TEXT_BG = (0, 100, 200)  # Dark orange
-MASK_COLOR = (0, 255, 255)  # Yellow for masks
 
 
 def draw_plate_detections(
     image: np.ndarray,
     plates: List[Dict],
-    show_mask: bool = True,
     show_text: bool = True
 ) -> np.ndarray:
     """
-    Draw plate detections with bounding boxes, masks, and OCR text.
+    Draw plate detections with bounding boxes and OCR text.
 
     Args:
         image: RGB numpy array
         plates: List of plate detection dicts
-        show_mask: Draw segmentation masks
         show_text: Show OCR text on image
 
     Returns:
@@ -45,17 +42,11 @@ def draw_plate_detections(
         confidence = plate.get('confidence', 0.0)
         ocr_confidence = plate.get('ocr_confidence', 0.0)
         state = plate.get('state', 'Unknown')
-        has_mask = plate.get('has_mask', False)
-        mask = plate.get('mask')
 
         if len(bbox) != 4:
             continue
 
         x1, y1, x2, y2 = map(int, bbox)
-
-        # Draw mask if available
-        if show_mask and has_mask and mask is not None:
-            annotated = draw_mask_overlay(annotated, mask, MASK_COLOR)
 
         # Draw bounding box
         cv2.rectangle(annotated, (x1, y1), (x2, y2), PLATE_COLOR, 3)
@@ -110,66 +101,6 @@ def draw_plate_detections(
             )
 
     return annotated
-
-
-def draw_mask_overlay(
-    image: np.ndarray,
-    mask: np.ndarray,
-    color: Tuple[int, int, int],
-    alpha: float = 0.4
-) -> np.ndarray:
-    """
-    Draw semi-transparent mask overlay on image.
-
-    Args:
-        image: RGB numpy array
-        mask: Binary mask (2D array)
-        color: RGB color tuple
-        alpha: Transparency (0-1)
-
-    Returns:
-        Image with mask overlay
-    """
-    result = image.copy()
-
-    # Convert mask to numpy if needed
-    if isinstance(mask, list):
-        mask = np.array(mask, dtype=np.uint8)
-
-    # Ensure mask is 2D
-    if mask.ndim > 2:
-        mask = mask.squeeze()
-    if mask.ndim == 3:
-        mask = mask[0]
-
-    # Skip if mask is empty or invalid
-    if mask.size == 0 or mask.ndim != 2:
-        return result
-
-    # Resize mask to image size if needed
-    if mask.shape != (image.shape[0], image.shape[1]):
-        mask = cv2.resize(
-            mask,
-            (image.shape[1], image.shape[0]),
-            interpolation=cv2.INTER_NEAREST
-        )
-
-    # Create colored overlay
-    overlay = result.copy()
-    overlay[mask > 0] = color
-
-    # Blend with original
-    result = cv2.addWeighted(overlay, alpha, result, 1 - alpha, 0)
-
-    # Draw contour
-    contours, _ = cv2.findContours(
-        mask.astype(np.uint8),
-        cv2.RETR_EXTERNAL,
-        cv2.CHAIN_APPROX_SIMPLE
-    )
-    cv2.drawContours(result, contours, -1, color, 2)
-
-    return result
 
 
 def validate_plate_format(

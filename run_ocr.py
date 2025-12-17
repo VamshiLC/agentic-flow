@@ -59,11 +59,6 @@ Examples:
         help="Target FPS for video processing (default: 1.0)"
     )
     parser.add_argument(
-        "--no-sam3",
-        action="store_true",
-        help="Disable SAM3 segmentation masks (faster)"
-    )
-    parser.add_argument(
         "--single-stage",
         action="store_true",
         help="Use single-stage detection+OCR (faster but less accurate)"
@@ -138,7 +133,6 @@ Examples:
             output_dir=args.output,
             target_fps=args.fps,
             ocr_agent=ocr_agent,
-            use_sam3=not args.no_sam3,
             save_frames=not args.no_frames,
             save_video=not args.no_video,
             save_json=True
@@ -149,7 +143,6 @@ Examples:
             image_path=args.input,
             output_dir=args.output,
             ocr_agent=ocr_agent,
-            use_sam3=not args.no_sam3,
             save_annotated=True,
             save_json=True
         )

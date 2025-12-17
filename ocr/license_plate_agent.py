@@ -16,16 +16,13 @@ from PIL import Image
 from typing import List, Dict, Optional, Union, Tuple
 import logging
 
-# Import existing model loaders (no modifications needed)
+# Import existing Qwen model loader (no modifications needed)
 from models.qwen_direct_loader import Qwen3VLDirectDetector
-from models.sam3_loader import load_sam3_model
 
 from .prompts import (
     build_plate_detection_prompt,
     build_ocr_prompt,
-    build_combined_detection_ocr_prompt,
-    PLATE_PATTERNS,
-    STATE_IDENTIFIERS
+    build_combined_detection_ocr_prompt
 )
 
 logger = logging.getLogger(__name__)
@@ -50,7 +47,6 @@ class LicensePlateOCR:
         device: Optional[str] = None,
         use_quantization: bool = False,
         low_memory: bool = False,
-        sam3_confidence: float = 0.4,
         two_stage: bool = True,
         plate_padding: float = 0.1
     ):
@@ -62,7 +58,6 @@ class LicensePlateOCR:
             device: cuda/cpu (auto-detect if None)
             use_quantization: Use 8-bit quantization for lower memory
             low_memory: Enable additional memory optimizations
-            sam3_confidence: SAM3 mask confidence threshold
             two_stage: Use two-stage detection+OCR (recommended for accuracy)
             plate_padding: Padding ratio when cropping plate (0.1 = 10%)
         """
@@ -88,20 +83,9 @@ class LicensePlateOCR:
             low_memory=low_memory
         )
 
-        # Load SAM3 for segmentation (optional)
-        print("Loading SAM3 model...")
-        try:
-            self.sam3_processor = load_sam3_model(
-                confidence_threshold=sam3_confidence,
-                device=self.device
-            )
-            self.sam3_available = True
-            print("SAM3 loaded successfully")
-        except Exception as e:
-            logger.warning(f"SAM3 failed to load: {e}")
-            self.sam3_processor = None
-            self.sam3_available = False
-            print("SAM3 not available - will skip segmentation")
+        # SAM3 not needed for OCR - just detection + text reading
+        self.sam3_processor = None
+        self.sam3_available = False
 
         print(f"\n{'='*60}")
         print("LICENSE PLATE OCR - Ready")
@@ -109,15 +93,13 @@ class LicensePlateOCR:
 
     def detect_and_read(
         self,
-        image: Union[Image.Image, str, np.ndarray],
-        use_sam3: bool = True
+        image: Union[Image.Image, str, np.ndarray]
     ) -> Dict:
         """
         Detect license plates and extract text.
 
         Args:
             image: PIL Image, numpy array, or path to image
-            use_sam3: Generate segmentation masks (if available)
 
         Returns:
             dict: {
@@ -128,13 +110,10 @@ class LicensePlateOCR:
                         'plate_text': str,
                         'ocr_confidence': float,
                         'state': str,
-                        'format': str,
-                        'mask': optional,
-                        'has_mask': bool
+                        'format': str
                     }
                 ],
-                'num_plates': int,
-                'has_masks': bool
+                'num_plates': int
             }
         """
         # Convert to PIL Image
@@ -144,14 +123,13 @@ class LicensePlateOCR:
             image = Image.fromarray(image).convert('RGB')
 
         if self.two_stage:
-            return self._detect_two_stage(image, use_sam3)
+            return self._detect_two_stage(image)
         else:
-            return self._detect_single_stage(image, use_sam3)
+            return self._detect_single_stage(image)
 
     def _detect_two_stage(
         self,
-        image: Image.Image,
-        use_sam3: bool
+        image: Image.Image
     ) -> Dict:
         """
         Two-stage detection: Detect plates -> Crop -> OCR
@@ -165,7 +143,7 @@ class LicensePlateOCR:
 
         if not detection_result.get('success', False):
             logger.error(f"Detection failed: {detection_result.get('error', 'Unknown error')}")
-            return {'plates': [], 'num_plates': 0, 'has_masks': False}
+            return {'plates': [], 'num_plates': 0}
 
         # Parse detection response
         plates = self._parse_plate_detections(
@@ -175,7 +153,7 @@ class LicensePlateOCR:
 
         if len(plates) == 0:
             logger.info("No plates detected")
-            return {'plates': [], 'num_plates': 0, 'has_masks': False}
+            return {'plates': [], 'num_plates': 0}
 
         logger.info(f"Detected {len(plates)} plate(s)")
 
@@ -195,32 +173,17 @@ class LicensePlateOCR:
             plate['state'] = ocr_result.get('state', 'Unknown')
             plate['format'] = ocr_result.get('format', 'Unknown')
 
-            # Stage 3: SAM3 segmentation (optional)
-            if use_sam3 and self.sam3_available and self.sam3_processor:
-                mask = self._segment_plate(image, bbox)
-                if mask is not None:
-                    plate['mask'] = mask.tolist() if isinstance(mask, np.ndarray) else mask
-                    plate['has_mask'] = True
-                else:
-                    plate['mask'] = None
-                    plate['has_mask'] = False
-            else:
-                plate['mask'] = None
-                plate['has_mask'] = False
-
             enhanced_plates.append(plate)
             logger.info(f"  Plate text: {plate['plate_text']} (conf: {plate['ocr_confidence']:.2f})")
 
         return {
             'plates': enhanced_plates,
-            'num_plates': len(enhanced_plates),
-            'has_masks': use_sam3 and any(p.get('has_mask') for p in enhanced_plates)
+            'num_plates': len(enhanced_plates)
         }
 
     def _detect_single_stage(
         self,
-        image: Image.Image,
-        use_sam3: bool
+        image: Image.Image
     ) -> Dict:
         """
         Single-stage: Combined detection + OCR in one pass.
@@ -231,24 +194,16 @@ class LicensePlateOCR:
         result = self.qwen_detector.detect(image, prompt)
 
         if not result.get('success', False):
-            return {'plates': [], 'num_plates': 0, 'has_masks': False}
+            return {'plates': [], 'num_plates': 0}
 
         plates = self._parse_combined_response(
             result.get('text', ''),
             image.size
         )
 
-        # Add SAM3 masks if requested
-        if use_sam3 and self.sam3_available:
-            for plate in plates:
-                mask = self._segment_plate(image, plate['bbox'])
-                plate['mask'] = mask.tolist() if mask is not None else None
-                plate['has_mask'] = mask is not None
-
         return {
             'plates': plates,
-            'num_plates': len(plates),
-            'has_masks': use_sam3 and any(p.get('has_mask') for p in plates)
+            'num_plates': len(plates)
         }
 
     def _crop_plate_region(
@@ -466,70 +421,6 @@ class LicensePlateOCR:
                 continue
 
         return plates
-
-    def _segment_plate(
-        self,
-        image: Image.Image,
-        bbox: List[int]
-    ) -> Optional[np.ndarray]:
-        """
-        Segment plate region using SAM3 with bbox prompt.
-
-        Args:
-            image: Full image
-            bbox: [x1, y1, x2, y2] bounding box
-
-        Returns:
-            numpy array mask or None if failed
-        """
-        if not self.sam3_available or self.sam3_processor is None:
-            return None
-
-        try:
-            img_width, img_height = image.size
-            x1, y1, x2, y2 = bbox
-
-            # Set image in SAM3
-            inference_state = self.sam3_processor.set_image(image)
-
-            # Normalize bbox to [0, 1] range - corner format [x1, y1, x2, y2]
-            box_normalized = [
-                x1 / img_width,
-                y1 / img_height,
-                x2 / img_width,
-                y2 / img_height
-            ]
-
-            # Add geometric prompt
-            output = self.sam3_processor.add_geometric_prompt(
-                box=box_normalized,
-                label=True,
-                state=inference_state
-            )
-
-            # Extract masks from output
-            masks = None
-            if output is None:
-                logger.warning("SAM3 returned None")
-            elif isinstance(output, dict) and 'masks' in output:
-                masks = output['masks']
-            elif hasattr(output, 'masks'):
-                masks = output.masks
-
-            # Return first/best mask
-            if masks is not None and len(masks) > 0:
-                mask = masks[0]
-                if torch.is_tensor(mask):
-                    mask = mask.cpu().numpy()
-                if mask.ndim == 3:
-                    mask = mask[0]  # Take first if multiple
-                return mask.astype(np.uint8)
-
-            return None
-
-        except Exception as e:
-            logger.error(f"SAM3 segmentation failed: {e}")
-            return None
 
     def cleanup(self):
         """Clean up models and free GPU memory."""
