@@ -891,9 +891,13 @@ If you find {category}, output the JSON. If nothing found, output: []"""
             exemplar_box_bottom = 10 + exemplar_height + 30
 
             # Prompt that references the merged example
-            merged_prompt = f"""Look at this image. In the TOP-LEFT corner (red border, "EXAMPLE" label) is a reference showing {display_name}.
+            # Use different prompts for road defects vs other categories
+            road_defect_categories = ['potholes', 'alligator_cracks', 'longitudinal_cracks', 'transverse_cracks', 'road_surface_damage']
 
-Find ALL INDIVIDUAL {display_name} in the road area of this image.
+            if category in road_defect_categories:
+                merged_prompt = f"""Look at this image. In the TOP-LEFT corner (red border, "EXAMPLE" label) is a reference showing {display_name}.
+
+Find ALL INDIVIDUAL {display_name} in the ROAD SURFACE of this image.
 
 CRITICAL - BOUNDING BOX RULES:
 - Draw a SEPARATE small box around EACH individual {display_name}
@@ -902,8 +906,24 @@ CRITICAL - BOUNDING BOX RULES:
 - If there are 5 cracks, output 5 separate small boxes
 - Box width/height should typically be 50-300 pixels, NOT 1000+ pixels
 
-Output JSON array with MULTIPLE small bounding boxes:
-[{{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}, {{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}, ...]
+Output JSON array:
+[{{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}, ...]
+
+Image size: {img_width} x {img_height} pixels.
+Exclude the example area (top-left corner up to x={exemplar_box_right}, y={exemplar_box_bottom}).
+If no {display_name} found, output: []"""
+            else:
+                # General prompt for non-road-defect categories (graffiti, signs, etc.)
+                merged_prompt = f"""Look at this image. In the TOP-LEFT corner (red border, "EXAMPLE" label) is a reference showing {display_name}.
+
+Find ALL instances of {display_name} ANYWHERE in this image (on signs, walls, poles, buildings, etc.).
+
+BOUNDING BOX RULES:
+- Draw a TIGHT box around EACH {display_name} you find
+- Include {display_name} on signs, walls, fences, buildings, or any surface
+
+Output JSON array:
+[{{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}, ...]
 
 Image size: {img_width} x {img_height} pixels.
 Exclude the example area (top-left corner up to x={exemplar_box_right}, y={exemplar_box_bottom}).
