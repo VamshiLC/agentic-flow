@@ -16,7 +16,7 @@ from PIL import Image
 from typing import List, Dict, Optional, Union, Tuple
 import logging
 
-# Import existing Qwen model loader (no modifications needed)
+# Import Qwen model loader
 from models.qwen_direct_loader import Qwen3VLDirectDetector
 
 from .prompts import (
