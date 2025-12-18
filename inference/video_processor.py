@@ -33,7 +33,12 @@ def process_video(
     enable_chunking=False,
     chunk_duration=600.0,
     chunk_overlap=1.0,
-    cleanup_chunks=True
+    cleanup_chunks=True,
+    # Face blurring parameters
+    enable_face_blur=False,
+    face_blur_backend='retinaface',
+    face_blur_type='gaussian',
+    face_blur_strength=51
 ):
     """
     Process entire GoPro video for infrastructure detection.
@@ -49,6 +54,10 @@ def process_video(
         chunk_duration: Duration of each chunk in seconds (default: 600 = 10 min)
         chunk_overlap: Overlap between chunks in seconds (default: 1.0)
         cleanup_chunks: Delete chunk files after processing (default: True)
+        enable_face_blur: Blur faces in frames before detection (default: False)
+        face_blur_backend: Face detection backend ('retinaface', 'mediapipe', or 'opencv')
+        face_blur_type: Blur type ('gaussian' or 'pixelate')
+        face_blur_strength: Blur intensity
 
     Returns:
         dict: Processing results with summary statistics
@@ -59,6 +68,14 @@ def process_video(
             "gopro_video.mp4",
             output_dir="results/",
             sample_rate=15  # 2 fps
+        )
+
+        # With face blurring
+        results = process_video(
+            "gopro_video.mp4",
+            output_dir="results/",
+            sample_rate=15,
+            enable_face_blur=True
         )
 
         # With chunking for large videos
@@ -110,7 +127,11 @@ def process_video(
         frames_dir,
         sample_rate=sample_rate,
         start_time=start_time,
-        end_time=end_time
+        end_time=end_time,
+        enable_face_blur=enable_face_blur,
+        face_blur_backend=face_blur_backend,
+        face_blur_type=face_blur_type,
+        face_blur_strength=face_blur_strength
     )
 
     if num_frames == 0:

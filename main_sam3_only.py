@@ -127,6 +127,27 @@ Examples:
         help='List all available categories and exit'
     )
 
+    # Face blurring arguments
+    parser.add_argument(
+        '--enable-face-blur',
+        action='store_true',
+        help='Enable SAM3-based face blurring (blurs faces before infrastructure detection)'
+    )
+
+    parser.add_argument(
+        '--face-blur-type',
+        choices=['gaussian', 'pixelate'],
+        default='gaussian',
+        help='Blur type for faces (default: gaussian)'
+    )
+
+    parser.add_argument(
+        '--face-blur-strength',
+        type=int,
+        default=51,
+        help='Blur strength (default: 51)'
+    )
+
     return parser.parse_args()
 
 
@@ -284,6 +305,9 @@ def process_video_mode(args, model, processor):
         categories=args.categories,
         confidence_threshold=args.confidence,
         device=args.device or "cuda",
+        enable_face_blur=args.enable_face_blur,
+        face_blur_type=args.face_blur_type,
+        face_blur_strength=args.face_blur_strength,
     )
 
     # Process video

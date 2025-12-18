@@ -9,13 +9,23 @@ import subprocess
 import shutil
 import numpy as np
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import timedelta
 
 
-def extract_frames(video_path, output_dir, sample_rate=1, start_time=None, end_time=None):
+def extract_frames(
+    video_path,
+    output_dir,
+    sample_rate=1,
+    start_time=None,
+    end_time=None,
+    enable_face_blur=False,
+    face_blur_backend='retinaface',
+    face_blur_type='gaussian',
+    face_blur_strength=51
+):
     """
-    Extract frames from a video file.
+    Extract frames from a video file with optional face blurring.
 
     Args:
         video_path: Path to the input video file
@@ -23,19 +33,45 @@ def extract_frames(video_path, output_dir, sample_rate=1, start_time=None, end_t
         sample_rate: Extract every Nth frame (1=all frames, 30=1 per second at 30fps)
         start_time: Optional start time in seconds
         end_time: Optional end time in seconds
+        enable_face_blur: If True, blur faces in extracted frames (default: False)
+        face_blur_backend: Face detection backend ('retinaface', 'mediapipe', or 'opencv')
+        face_blur_type: Blur type ('gaussian' or 'pixelate')
+        face_blur_strength: Blur intensity (kernel size or pixel size)
 
     Returns:
         int: Number of frames extracted
 
     Example:
-        # Extract 1 frame per second from a 30fps video
-        num_frames = extract_frames("gopro_video.mp4", "frames/", sample_rate=30)
+        # Extract 1 frame per second from a 30fps video with face blurring
+        num_frames = extract_frames(
+            "gopro_video.mp4",
+            "frames/",
+            sample_rate=30,
+            enable_face_blur=True
+        )
     """
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
 
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
+
+    # Initialize face blurrer if enabled
+    face_blurrer = None
+    total_faces_detected = 0
+    if enable_face_blur:
+        try:
+            from utils.face_blur import FaceBlurrer
+            face_blurrer = FaceBlurrer(
+                backend=face_blur_backend,
+                blur_type=face_blur_type,
+                blur_strength=face_blur_strength
+            )
+            print(f"Face blurring ENABLED (backend: {face_blur_backend}, type: {face_blur_type})")
+        except ImportError as e:
+            print(f"WARNING: Could not import face_blur module: {e}")
+            print("Proceeding without face blurring.")
+            enable_face_blur = False
 
     # Open video
     cap = cv2.VideoCapture(video_path)
@@ -53,6 +89,7 @@ def extract_frames(video_path, output_dir, sample_rate=1, start_time=None, end_t
     print(f"  - Total frames: {total_frames}")
     print(f"  - Duration: {duration:.2f}s")
     print(f"  - Sample rate: every {sample_rate} frames")
+    print(f"  - Face blurring: {'ENABLED' if enable_face_blur else 'DISABLED'}")
 
     # Calculate start and end frames
     start_frame = int(start_time * fps) if start_time else 0
@@ -75,18 +112,29 @@ def extract_frames(video_path, output_dir, sample_rate=1, start_time=None, end_t
 
         # Extract frame if it matches the sample rate
         if frame_count % sample_rate == 0:
+            # Apply face blurring if enabled
+            if enable_face_blur and face_blurrer is not None:
+                frame, num_faces = face_blurrer.blur_faces(frame, return_face_count=True)
+                total_faces_detected += num_faces
+
             frame_path = os.path.join(output_dir, f"frame_{extracted:06d}.jpg")
             cv2.imwrite(frame_path, frame)
             extracted += 1
 
             if extracted % 10 == 0:
-                print(f"  Extracted {extracted} frames...")
+                faces_info = f", {total_faces_detected} faces blurred" if enable_face_blur else ""
+                print(f"  Extracted {extracted} frames{faces_info}...")
 
         frame_count += 1
 
     cap.release()
 
-    print(f"\nExtracted {extracted} frames to {output_dir}")
+    if enable_face_blur:
+        print(f"\nExtracted {extracted} frames to {output_dir}")
+        print(f"Total faces detected and blurred: {total_faces_detected}")
+    else:
+        print(f"\nExtracted {extracted} frames to {output_dir}")
+
     return extracted
 
 

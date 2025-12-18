@@ -27,6 +27,9 @@ class SAM3OnlyVideoProcessor:
         categories: Optional[List[str]] = None,
         confidence_threshold: float = 0.3,
         device: str = "cuda",
+        enable_face_blur: bool = False,
+        face_blur_type: str = 'gaussian',
+        face_blur_strength: int = 51,
     ):
         """
         Initialize SAM3-only video processor.
@@ -37,11 +40,17 @@ class SAM3OnlyVideoProcessor:
             categories: List of category names to detect
             confidence_threshold: Minimum confidence score
             device: Device for processing
+            enable_face_blur: Enable SAM3-based face blurring
+            face_blur_type: Blur type ('gaussian' or 'pixelate')
+            face_blur_strength: Blur strength
         """
         self.model = model
         self.processor = processor
         self.device = device
         self.confidence_threshold = confidence_threshold
+        self.enable_face_blur = enable_face_blur
+        self.face_blur_type = face_blur_type
+        self.face_blur_strength = face_blur_strength
 
         # Import categories from existing prompts
         from prompts.category_prompts import CATEGORY_PROMPTS
@@ -54,9 +63,29 @@ class SAM3OnlyVideoProcessor:
         self.category_prompts = CATEGORY_PROMPTS
         self.text_prompts = self._build_text_prompts()
 
+        # Initialize face blurrer if enabled
+        self.face_blurrer = None
+        if self.enable_face_blur:
+            try:
+                from utils.face_blur import FaceBlurrer
+                self.face_blurrer = FaceBlurrer(
+                    backend='sam3',
+                    blur_type=face_blur_type,
+                    blur_strength=face_blur_strength,
+                    sam3_model=model,
+                    sam3_processor=processor,
+                    device=device
+                )
+                print(f"SAM3OnlyVideoProcessor initialized with FACE BLURRING:")
+            except Exception as e:
+                print(f"WARNING: Could not initialize face blurrer: {e}")
+                print("  Proceeding without face blurring.")
+                self.enable_face_blur = False
+
         print(f"SAM3OnlyVideoProcessor initialized:")
         print(f"  Categories: {len(self.categories)}")
         print(f"  Confidence threshold: {confidence_threshold}")
+        print(f"  Face blurring: {'ENABLED' if self.enable_face_blur else 'DISABLED'}")
 
     def _build_text_prompts(self) -> List[str]:
         """Build optimized text prompts for SAM3."""
@@ -95,6 +124,36 @@ class SAM3OnlyVideoProcessor:
         if max_frames:
             frames = frames[:max_frames]
             print(f"  Limited to {len(frames)} frames")
+
+        # Apply face blurring if enabled
+        if self.enable_face_blur and self.face_blurrer:
+            print(f"\n  Applying SAM3 face blurring to {len(frames)} frames...")
+            total_faces_blurred = 0
+            blurred_frames = []
+            for i, frame in enumerate(frames):
+                # Convert PIL image to numpy if needed
+                if not isinstance(frame, np.ndarray):
+                    frame = np.array(frame)
+                # Ensure BGR format
+                if frame.shape[-1] == 3 and len(frame.shape) == 3:
+                    # Assume RGB from video loader, convert to BGR for OpenCV
+                    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                else:
+                    frame_bgr = frame
+
+                # Blur faces
+                blurred, num_faces = self.face_blurrer.blur_faces(frame_bgr, return_face_count=True)
+                total_faces_blurred += num_faces
+
+                # Convert back to RGB for SAM3
+                blurred_rgb = cv2.cvtColor(blurred, cv2.COLOR_BGR2RGB)
+                blurred_frames.append(blurred_rgb)
+
+                if (i + 1) % 10 == 0:
+                    print(f"    Blurred {i+1}/{len(frames)} frames ({total_faces_blurred} faces total)")
+
+            frames = blurred_frames
+            print(f"  Face blurring complete: {total_faces_blurred} faces blurred across {len(frames)} frames")
 
         # Process frames with SAM3
         all_detections = self._process_frames_with_sam3(frames, fps)
@@ -310,6 +369,9 @@ def create_sam3_only_video_processor(
     categories: Optional[List[str]] = None,
     confidence_threshold: float = 0.3,
     device: str = "cuda",
+    enable_face_blur: bool = False,
+    face_blur_type: str = 'gaussian',
+    face_blur_strength: int = 51,
 ) -> SAM3OnlyVideoProcessor:
     """
     Convenience function to create SAM3-only video processor.
@@ -320,6 +382,9 @@ def create_sam3_only_video_processor(
         categories: Categories to detect
         confidence_threshold: Minimum confidence
         device: Processing device
+        enable_face_blur: Enable SAM3-based face blurring
+        face_blur_type: Blur type ('gaussian' or 'pixelate')
+        face_blur_strength: Blur strength
 
     Returns:
         SAM3OnlyVideoProcessor instance
@@ -330,4 +395,7 @@ def create_sam3_only_video_processor(
         categories=categories,
         confidence_threshold=confidence_threshold,
         device=device,
+        enable_face_blur=enable_face_blur,
+        face_blur_type=face_blur_type,
+        face_blur_strength=face_blur_strength,
     )

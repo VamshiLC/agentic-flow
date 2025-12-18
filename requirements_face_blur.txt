@@ -1,0 +1,16 @@
+# Face Blurring Dependencies
+# Install with: pip install -r requirements_face_blur.txt
+
+# RetinaFace - State-of-the-art face detection (BEST - recommended)
+retinaface>=0.0.17
+
+# MediaPipe - Fast and accurate (GOOD - alternative)
+mediapipe>=0.10.0
+
+# Note: OpenCV is already in your main requirements.txt (BASIC - fallback)
+# opencv-python>=4.8.0
+
+# Choose one:
+# - RetinaFace: Best accuracy, handles difficult angles/lighting
+# - MediaPipe: Good accuracy, CPU-friendly, fast
+# - OpenCV: Built-in, lightweight, basic frontal face detection

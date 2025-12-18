@@ -102,10 +102,14 @@ def process_video(
     output_dir: str,
     target_fps: float = 1.0,
     batch_size: int = 1,
-    save_video: bool = True
+    save_video: bool = True,
+    enable_face_blur: bool = False,
+    face_blur_backend: str = 'retinaface',
+    face_blur_type: str = 'gaussian',
+    face_blur_strength: int = 51
 ):
     """
-    Process video with optional batch processing.
+    Process video with optional batch processing and face blurring.
 
     Args:
         video_path: Path to input video
@@ -114,6 +118,10 @@ def process_video(
         target_fps: Target FPS for processing
         batch_size: Number of frames to process in batch (1 = sequential)
         save_video: Whether to save annotated video
+        enable_face_blur: Blur faces before detection
+        face_blur_backend: Face detection backend ('retinaface', 'mediapipe', or 'opencv')
+        face_blur_type: Blur type ('gaussian' or 'pixelate')
+        face_blur_strength: Blur intensity
     """
     print(f"\nProcessing video: {video_path}")
 
@@ -133,6 +141,24 @@ def process_video(
     print(f"  Resolution: {width}x{height}")
     print(f"  Total frames: {total_frames}")
     print(f"  Target processing FPS: {target_fps}")
+    print(f"  Face blurring: {'ENABLED' if enable_face_blur else 'DISABLED'}")
+
+    # Initialize face blurrer if enabled
+    face_blurrer = None
+    total_faces_detected = 0
+    if enable_face_blur:
+        try:
+            from utils.face_blur import FaceBlurrer
+            face_blurrer = FaceBlurrer(
+                backend=face_blur_backend,
+                blur_type=face_blur_type,
+                blur_strength=face_blur_strength
+            )
+            print(f"    Backend: {face_blur_backend}, Type: {face_blur_type}")
+        except ImportError as e:
+            logging.warning(f"Could not import face_blur module: {e}")
+            print("    WARNING: Face blurring disabled due to import error")
+            enable_face_blur = False
 
     # Calculate frame interval
     frame_interval = max(1, int(video_fps / target_fps))
@@ -161,6 +187,11 @@ def process_video(
 
         # Extract every Nth frame
         if frame_idx % frame_interval == 0:
+            # Apply face blurring if enabled (on BGR frame before conversion)
+            if enable_face_blur and face_blurrer is not None:
+                frame, num_faces = face_blurrer.blur_faces(frame, return_face_count=True)
+                total_faces_detected += num_faces
+
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             pil_image = Image.fromarray(frame_rgb)
             frames_to_process.append((frame_rgb, pil_image))
@@ -173,6 +204,8 @@ def process_video(
     cap.release()
 
     print(f"Extracted {len(frames_to_process)} frames to process")
+    if enable_face_blur:
+        print(f"  Total faces blurred: {total_faces_detected}")
 
     # Save extracted frames to disk
     frames_dir = video_output_dir / "frames"
@@ -410,6 +443,29 @@ Note: All processing now uses the agentic pipeline (Qwen3-VL for detection + SAM
         action="store_true",
         help="Skip saving annotated video (faster, JSON only)"
     )
+    parser.add_argument(
+        "--enable-face-blur",
+        action="store_true",
+        help="Enable face blurring for privacy (blurs faces before infrastructure detection)"
+    )
+    parser.add_argument(
+        "--face-blur-backend",
+        choices=["retinaface", "mediapipe", "opencv"],
+        default="retinaface",
+        help="Face detection backend (default: retinaface - best accuracy)"
+    )
+    parser.add_argument(
+        "--face-blur-type",
+        choices=["gaussian", "pixelate"],
+        default="gaussian",
+        help="Blur type (default: gaussian)"
+    )
+    parser.add_argument(
+        "--face-blur-strength",
+        type=int,
+        default=51,
+        help="Blur strength - kernel size for gaussian (must be odd) or pixel size for pixelate (default: 51)"
+    )
 
     args = parser.parse_args()
 
@@ -427,6 +483,7 @@ Note: All processing now uses the agentic pipeline (Qwen3-VL for detection + SAM
     print(f"Pipeline: Qwen3-VL detection + SAM3 segmentation")
     print(f"Quantization: {'Enabled (8-bit)' if args.quantize else 'Disabled'}")
     print(f"Low memory mode: {'Enabled' if args.low_memory else 'Disabled'}")
+    print(f"Face blurring: {'Enabled' if args.enable_face_blur else 'Disabled'}")
     if args.mode == "video" and args.batch_size > 1:
         print(f"Batch processing: Enabled (batch size: {args.batch_size})")
 
@@ -458,7 +515,11 @@ Note: All processing now uses the agentic pipeline (Qwen3-VL for detection + SAM
                 args.output,
                 args.fps,
                 batch_size=args.batch_size,
-                save_video=not args.no_video
+                save_video=not args.no_video,
+                enable_face_blur=args.enable_face_blur,
+                face_blur_backend=args.face_blur_backend,
+                face_blur_type=args.face_blur_type,
+                face_blur_strength=args.face_blur_strength
             )
 
         print("\n" + "="*70)
