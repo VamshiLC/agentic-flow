@@ -1,0 +1,33 @@
+{
+  "blur_categories": [
+    "face"
+  ],
+  "detect_categories": [
+    "license plate",
+    "pothole",
+    "crack",
+    "car",
+    "person",
+    "road sign",
+    "traffic light",
+    "construction zone",
+    "manhole cover"
+  ],
+  "settings": {
+    "blur_strength": 51,
+    "score_threshold": 0.5,
+    "add_padding": 20
+  },
+  "colors": {
+    "face": [0, 255, 0],
+    "license plate": [0, 255, 255],
+    "pothole": [0, 0, 255],
+    "crack": [255, 0, 0],
+    "car": [255, 0, 255],
+    "person": [0, 165, 255],
+    "road sign": [255, 255, 0],
+    "traffic light": [0, 255, 128],
+    "construction zone": [255, 128, 0],
+    "manhole cover": [128, 128, 255]
+  }
+}
