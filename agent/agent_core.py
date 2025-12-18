@@ -583,9 +583,12 @@ class InfrastructureDetectionAgentCore:
         return detections
 
     def _detect_single_category(self, image: Image.Image, category: str, description: str, img_width: int, img_height: int) -> List[Dict]:
-        """Detect a single category, using exemplars if available."""
+        """Detect a single category, using MERGED exemplar approach if available.
 
-        # Check if we should use exemplar-enhanced detection
+        Strategy: Merge exemplar image INTO target image, then ask model to find
+        similar patterns. This works better than multi-image prompts.
+        """
+        # Check if we should use exemplar-enhanced detection (MERGED approach)
         use_exemplars = (
             self.exemplar_manager is not None and
             self.exemplar_prompt_builder is not None and
@@ -729,13 +732,60 @@ If you find {category}, output the JSON. If nothing found, output: []"""
             logger.error(f"Detection error for {category}: {e}")
             return []
 
+    def _merge_exemplar_with_target(self, exemplar_img: Image.Image, target_img: Image.Image) -> Image.Image:
+        """
+        Merge exemplar image with target image side-by-side.
+
+        Layout: [EXEMPLAR | TARGET]
+        The exemplar is resized to fit on the left, target on the right.
+        """
+        # Resize exemplar to be smaller (reference size)
+        exemplar_height = target_img.height // 3  # 1/3 of target height
+        aspect_ratio = exemplar_img.width / exemplar_img.height
+        exemplar_width = int(exemplar_height * aspect_ratio)
+
+        # Resize exemplar
+        exemplar_resized = exemplar_img.resize((exemplar_width, exemplar_height), Image.Resampling.LANCZOS)
+
+        # Create combined image (exemplar on top-left corner of target)
+        combined = target_img.copy()
+
+        # Add a border around exemplar
+        from PIL import ImageDraw
+        border = 3
+
+        # Paste exemplar in top-left with border
+        paste_x, paste_y = 10, 10
+
+        # Draw border rectangle
+        draw = ImageDraw.Draw(combined)
+        draw.rectangle(
+            [paste_x - border, paste_y - border,
+             paste_x + exemplar_width + border, paste_y + exemplar_height + border],
+            outline=(255, 0, 0), width=border
+        )
+
+        # Paste exemplar
+        combined.paste(exemplar_resized, (paste_x, paste_y))
+
+        # Add label "EXAMPLE"
+        try:
+            from PIL import ImageFont
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
+        except:
+            font = ImageFont.load_default()
+
+        draw.rectangle([paste_x, paste_y + exemplar_height + border, paste_x + 80, paste_y + exemplar_height + border + 20], fill=(255, 0, 0))
+        draw.text((paste_x + 5, paste_y + exemplar_height + border + 2), "EXAMPLE", fill=(255, 255, 255), font=font)
+
+        return combined
+
     def _detect_with_exemplars(self, image: Image.Image, category: str, description: str, img_width: int, img_height: int) -> List[Dict]:
         """
         Enhanced detection using few-shot exemplars.
 
-        Uses exemplar images as visual context for improved detection accuracy.
-        The LLM sees reference images showing "this is what a {category} looks like"
-        before analyzing the target image.
+        STRATEGY: Merge exemplar image INTO the target image, then ask model
+        to find similar patterns. This works better than multi-image prompts.
 
         Args:
             image: Target image to analyze
@@ -748,119 +798,72 @@ If you find {category}, output the JSON. If nothing found, output: []"""
             List of detections with bboxes
         """
         try:
-            print(f"      [EXEMPLAR] Using exemplar-enhanced detection for '{category}'")
+            print(f"      [EXEMPLAR] Using MERGED exemplar detection for '{category}'")
 
-            # Build multi-image prompt with exemplars
-            # Use 'contrastive' strategy if you want positive+negative exemplars
-            strategy = self.exemplar_strategy
-            if strategy == "visual_context":
-                # visual_context only uses positive exemplars
-                pass
-            elif strategy == "contrastive":
-                # contrastive uses both positive and negative exemplars
-                pass
+            # Get exemplar images
+            exemplars = self.exemplar_manager.get_positive_exemplars(category, max_count=1)
 
-            prompt_data = self.exemplar_prompt_builder.build_detection_prompt(
-                category=category,
-                target_image=image,
-                strategy=strategy,
-                max_exemplars=self.max_exemplars
-            )
-
-            if not prompt_data.get("has_exemplars"):
-                # No exemplars available, fallback to text-only detection
+            if not exemplars or not exemplars[0].image:
                 print(f"      [EXEMPLAR] No exemplars found for '{category}', falling back to text-only")
                 return self._detect_with_text_only(image, category, description, img_width, img_height)
 
-            num_exemplars = len(prompt_data.get("exemplar_images", []))
-            print(f"      [EXEMPLAR] Found {num_exemplars} exemplars for '{category}'")
+            exemplar_img = exemplars[0].image
+            print(f"      [EXEMPLAR] Got 1 exemplar image, merging with target...")
 
-            # Enhance the prompt with image size info and JSON output format
-            base_prompt = prompt_data.get("prompt", "")
-            enhanced_prompt = f"""{base_prompt}
+            # MERGE exemplar INTO target image
+            merged_image = self._merge_exemplar_with_target(exemplar_img, image)
 
-IMAGE SIZE: {img_width} x {img_height} pixels.
+            # Get display name
+            display_name = category.replace("_", " ")
 
-OUTPUT FORMAT - Return JSON array with bounding boxes:
-[{{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}]
+            # Calculate where the exemplar box is in the merged image (to exclude from detection)
+            exemplar_height = img_height // 3
+            aspect_ratio = exemplar_img.width / exemplar_img.height
+            exemplar_width = int(exemplar_height * aspect_ratio)
+            exemplar_box_right = 10 + exemplar_width + 10
+            exemplar_box_bottom = 10 + exemplar_height + 30
 
-x1,y1 = top-left corner. x2,y2 = bottom-right corner.
-If you find {category} matching the exemplars, output the JSON. If nothing found, output: []"""
+            # Prompt that references the merged example
+            merged_prompt = f"""Look at this image. In the TOP-LEFT corner (marked with red border and "EXAMPLE" label),
+there is a reference showing what {display_name} looks like.
 
-            # Use detect_with_exemplars for cleaner multi-image handling
-            exemplar_images = prompt_data.get("exemplar_images", [])
+Now find ALL similar {display_name} in the REST of this image (outside the example box).
 
-            # IMPORTANT: Limit to 2-3 exemplars max - too many confuses the model
-            MAX_EXEMPLARS_FOR_DETECTION = 3
-            if len(exemplar_images) > MAX_EXEMPLARS_FOR_DETECTION:
-                print(f"      [EXEMPLAR] Limiting from {len(exemplar_images)} to {MAX_EXEMPLARS_FOR_DETECTION} exemplars")
-                exemplar_images = exemplar_images[:MAX_EXEMPLARS_FOR_DETECTION]
+IMPORTANT:
+- The example in top-left shows what to look for
+- Find similar patterns in the MAIN part of the image (the road)
+- Do NOT include the example box itself in your detections
+- Draw TIGHT bounding boxes around each {display_name} you find
 
-            if hasattr(self.qwen_detector, 'detect_with_exemplars') and exemplar_images:
-                # Build simpler descriptions for exemplars
-                display_name = self.exemplar_prompt_builder.CATEGORY_DISPLAY_NAMES.get(category, category)
-
-                # Get FULL exemplar images (not cropped) - cropped regions confuse the model
-                # because they look different from patterns in full-size target image
-                full_exemplar_images = []
-                for ex in self.exemplar_manager.get_positive_exemplars(category, max_count=len(exemplar_images)):
-                    if ex.image:  # Use full image, not cropped region
-                        full_exemplar_images.append(ex.image)
-
-                if not full_exemplar_images:
-                    full_exemplar_images = exemplar_images  # Fallback to whatever we have
-
-                exemplar_descriptions = [f"This road image contains {display_name} - look for similar patterns" for _ in full_exemplar_images]
-
-                # Simpler prompt - tell model to look for similar PATTERNS
-                simple_prompt = f"""The example images above show roads with {display_name}.
-Study the visual patterns of {display_name} in those examples.
-
-Now examine this target road image and find ALL areas with similar {display_name} patterns.
-
-Output JSON array with bounding boxes around each {display_name}:
+Output JSON array with bounding boxes:
 [{{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}]
 
 Image size: {img_width} x {img_height} pixels.
-Coordinates are in pixels. x1,y1 = top-left, x2,y2 = bottom-right.
-If no {display_name} found, output: []"""
+Only output detections where x1 > {exemplar_box_right} OR y1 > {exemplar_box_bottom} (outside the example box).
+If no {display_name} found in the main image, output: []"""
 
-                print(f"      [EXEMPLAR] Calling detect_with_exemplars with {len(full_exemplar_images)} FULL images")
-                result = self.qwen_detector.detect_with_exemplars(
-                    target_image=image,
-                    exemplar_images=full_exemplar_images,
-                    prompt=simple_prompt,
-                    exemplar_descriptions=exemplar_descriptions
-                )
-            elif hasattr(self.qwen_detector, 'detect_with_messages'):
-                # Fallback to message-based detection
-                messages = prompt_data.get("messages", [])
-                all_images = prompt_data.get("all_images", [image])
-
-                if messages and all_images:
-                    for msg in reversed(messages):
-                        if msg.get("role") == "user":
-                            content = msg.get("content", [])
-                            for item in content:
-                                if item.get("type") == "text":
-                                    item["text"] = enhanced_prompt
-                                    break
-                            break
-
-                    result = self.qwen_detector.detect_with_messages(messages, all_images)
-                else:
-                    result = self.qwen_detector.detect(image, enhanced_prompt)
-            else:
-                # Fallback: use standard detection with enhanced prompt
-                result = self.qwen_detector.detect(image, enhanced_prompt)
+            print(f"      [EXEMPLAR] Running detection on merged image...")
+            result = self.qwen_detector.detect(merged_image, merged_prompt)
 
             if not result.get("success"):
-                print(f"      [EXEMPLAR] Detection FAILED for '{category}': {result.get('error', 'unknown')}")
+                print(f"      [EXEMPLAR] Detection FAILED: {result.get('error', 'unknown')}")
                 return self._detect_with_text_only(image, category, description, img_width, img_height)
 
             response_text = result.get("text", "")
-            print(f"      [EXEMPLAR] Model response for '{category}': {response_text[:300]}...")
+            print(f"      [EXEMPLAR] Model response: {response_text[:300]}...")
             detections = self._parse_json_detection_response(response_text, img_width, img_height)
+
+            # Filter out any detections that overlap with the exemplar box
+            filtered_detections = []
+            for det in detections:
+                x1, y1, x2, y2 = det['bbox']
+                # Keep if detection is mostly outside the exemplar area
+                if x1 > exemplar_box_right or y1 > exemplar_box_bottom:
+                    filtered_detections.append(det)
+                else:
+                    print(f"      [EXEMPLAR] Filtered out detection in exemplar area: {det['bbox']}")
+
+            detections = filtered_detections
             print(f"      [EXEMPLAR] Parsed {len(detections)} detections for '{category}'")
 
             # Force correct label
