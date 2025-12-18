@@ -3,16 +3,7 @@
     "face"
   ],
   "detect_categories": [
-    "license plate",
-    "pothole",
-    "crack",
-    "damaged crosswalk",
-    "car",
-    "person",
-    "road sign",
-    "traffic light",
-    "construction zone",
-    "manhole cover"
+    "damaged crosswalk"
   ],
   "settings": {
     "blur_strength": 51,

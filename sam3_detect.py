@@ -222,20 +222,8 @@ Examples:
         all_detections[category] = boxes
         print(f"→ {len(boxes)} found")
 
-    # Save original
-    cv2.imwrite(str(output_path / "0_original.jpg"), image_cv)
-
-    # Detection visualization
-    print("\n4. Creating visualizations...")
-    detection_viz = image_cv.copy()
-
-    for category, boxes in all_detections.items():
-        if len(boxes) > 0:
-            color = category_colors.get(category, default_colors.get(category, (128, 128, 128)))
-            detection_viz = draw_detections(detection_viz, boxes, category, color)
-
-    cv2.imwrite(str(output_path / "1_all_detections.jpg"), detection_viz)
-    print("   ✓ All detections saved")
+    # Skip saving intermediate files - only save final result
+    print("\n4. Processing detections...")
 
     # Apply blur
     if blur_categories:
@@ -253,15 +241,13 @@ Examples:
                 )
                 total_blurred += len(boxes)
                 print(f"   ✓ Blurred {len(boxes)} {category}(s)")
-
-        cv2.imwrite(str(output_path / "2_privacy_protected.jpg"), blurred_image)
     else:
         blurred_image = image_cv.copy()
         total_blurred = 0
         print("\n5. No blur categories specified, skipping...")
 
-    # Final annotated
-    print("\n6. Creating final annotated image...")
+    # Final image with blur + detections
+    print("\n6. Creating final image...")
     final_viz = blurred_image.copy()
 
     for category in detect_categories:
@@ -270,8 +256,10 @@ Examples:
             color = category_colors.get(category, default_colors.get(category, (128, 128, 128)))
             final_viz = draw_detections(final_viz, boxes, category, color)
 
-    cv2.imwrite(str(output_path / "3_final_annotated.jpg"), final_viz)
-    print("   ✓ Final annotated saved")
+    # Save ONE final image
+    final_path = output_path / f"{Path(args.input).stem}_result.jpg"
+    cv2.imwrite(str(final_path), final_viz)
+    print(f"   ✓ Saved: {final_path}")
 
     # JSON summary
     summary = {
@@ -311,12 +299,9 @@ Examples:
     print("\n" + "=" * 70)
     print(f"📁 Results: {output_path}/")
     print("=" * 70)
-    print(f"   0_original.jpg          - Original image")
-    print(f"   1_all_detections.jpg    - All detections visualized")
-    if total_blurred > 0:
-        print(f"   2_privacy_protected.jpg - Privacy blur applied ({total_blurred} blurred)")
-    print(f"   3_final_annotated.jpg   - Final annotated (privacy-safe)")
-    print(f"   detections.json         - Detection data")
+    blur_status = f" ({total_blurred} faces blurred)" if total_blurred > 0 else ""
+    print(f"   {Path(args.input).stem}_result.jpg - Final image{blur_status} + detections")
+    print(f"   detections.json          - Detection data")
     print()
 
 
