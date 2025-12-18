@@ -13,6 +13,9 @@ Usage:
     # Single image
     python run_ocr.py --input vehicle.jpg --output ./results
 
+    # All images in a folder (batch processing)
+    python run_ocr.py --input ./images --output ./ocr_output --quantize
+
     # Video processing with tracking
     python run_ocr.py --input dashcam.mp4 --output ./results --fps 1
 
@@ -25,6 +28,7 @@ Usage:
 
 import argparse
 import sys
+import glob
 from pathlib import Path
 
 from ocr import LicensePlateOCR
@@ -107,24 +111,40 @@ Examples:
 
     # Validate input
     input_path = Path(args.input)
-    if not input_path.exists():
-        print(f"Error: Input file not found: {args.input}")
-        sys.exit(1)
 
     # Determine input type
     video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm'}
     image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
 
-    suffix = input_path.suffix.lower()
+    # Check if input is a folder
+    if input_path.is_dir():
+        input_type = "folder"
+        # Find all images in folder
+        image_files = []
+        for ext in image_extensions:
+            image_files.extend(glob.glob(str(input_path / f"*{ext}")))
+            image_files.extend(glob.glob(str(input_path / f"*{ext.upper()}")))
+        image_files = sorted(image_files)
 
-    if suffix in video_extensions:
-        input_type = "video"
-    elif suffix in image_extensions:
-        input_type = "image"
-    else:
-        print(f"Error: Unsupported file type: {suffix}")
-        print(f"Supported: {video_extensions | image_extensions}")
+        if not image_files:
+            print(f"Error: No images found in folder: {args.input}")
+            print(f"Supported formats: {image_extensions}")
+            sys.exit(1)
+        print(f"Found {len(image_files)} images in folder")
+    elif not input_path.exists():
+        print(f"Error: Input file not found: {args.input}")
         sys.exit(1)
+    else:
+        suffix = input_path.suffix.lower()
+
+        if suffix in video_extensions:
+            input_type = "video"
+        elif suffix in image_extensions:
+            input_type = "image"
+        else:
+            print(f"Error: Unsupported file type: {suffix}")
+            print(f"Supported: {video_extensions | image_extensions}")
+            sys.exit(1)
 
     # Initialize OCR agent
     print("\nInitializing License Plate OCR...")
@@ -148,6 +168,13 @@ Examples:
             save_json=True,
             enable_tracking=not args.no_tracking,
             use_sam3=not args.no_sam3
+        )
+    elif input_type == "folder":
+        print(f"\nProcessing {len(image_files)} images from: {args.input}")
+        result = process_batch_images(
+            image_paths=image_files,
+            output_dir=args.output,
+            ocr_agent=ocr_agent
         )
     else:
         print(f"\nProcessing image: {args.input}")
