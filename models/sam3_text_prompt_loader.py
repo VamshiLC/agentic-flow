@@ -5,7 +5,7 @@ Loads SAM3 Video model for text-prompted detection and segmentation.
 """
 
 import torch
-from transformers import Sam3VideoModel, Sam3VideoProcessor
+from transformers import Sam2Model, Sam2Processor
 from typing import Optional
 
 
@@ -19,7 +19,7 @@ class SAM3TextPromptLoader:
 
     def __init__(
         self,
-        model_name: str = "facebook/sam3",
+        model_name: str = "facebook/sam2-hiera-large",
         device: Optional[str] = None,
         dtype: torch.dtype = torch.float32,
     ):
@@ -56,14 +56,14 @@ class SAM3TextPromptLoader:
             print("Model already loaded, skipping...")
             return self.model, self.processor
 
-        print(f"\nLoading SAM3 Video model from {self.model_name}...")
+        print(f"\nLoading SAM2 Video model from {self.model_name}...")
         try:
             # Load processor
-            self.processor = Sam3VideoProcessor.from_pretrained(self.model_name)
+            self.processor = Sam2Processor.from_pretrained(self.model_name)
             print("  ✓ Processor loaded")
 
             # Load model
-            self.model = Sam3VideoModel.from_pretrained(self.model_name)
+            self.model = Sam2Model.from_pretrained(self.model_name)
             self.model = self.model.to(self.device, dtype=self.dtype)
             self.model.eval()
             print(f"  ✓ Model loaded to {self.device}")
@@ -71,7 +71,7 @@ class SAM3TextPromptLoader:
             return self.model, self.processor
 
         except Exception as e:
-            print(f"\n✗ Error loading SAM3 model: {e}")
+            print(f"\n✗ Error loading SAM2 model: {e}")
             print("\nTroubleshooting:")
             print("1. Install latest transformers: pip install --upgrade transformers")
             print("2. Login to Hugging Face: huggingface-cli login")
