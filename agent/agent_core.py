@@ -569,6 +569,13 @@ class InfrastructureDetectionAgentCore:
                 else:
                     print(f"  - {category}: 0")
 
+        # Remove duplicate detections (same area detected as multiple crack types)
+        if all_detections:
+            before_count = len(all_detections)
+            all_detections = self._remove_duplicate_detections(all_detections, iou_threshold=0.4)
+            if len(all_detections) < before_count:
+                print(f"\n[DEDUP] Removed {before_count - len(all_detections)} overlapping detections")
+
         return all_detections
 
     def _filter_bad_detections(self, detections: List[Dict], img_width: int, img_height: int) -> List[Dict]:
@@ -581,6 +588,58 @@ class InfrastructureDetectionAgentCore:
         # DISABLED - just return all detections
         # The model knows what cracks look like, trust it
         return detections
+
+    def _remove_duplicate_detections(self, all_detections: List[Dict], iou_threshold: float = 0.5) -> List[Dict]:
+        """
+        Remove duplicate/overlapping detections across categories.
+
+        When the same area is detected as multiple crack types, keep only ONE.
+        Priority: potholes > alligator_cracks > longitudinal_cracks > transverse_cracks
+        """
+        if len(all_detections) <= 1:
+            return all_detections
+
+        # Priority order (lower = higher priority)
+        priority = {
+            'potholes': 1,
+            'alligator_cracks': 2,
+            'longitudinal_cracks': 3,
+            'transverse_cracks': 4,
+        }
+
+        def calc_iou(box1, box2):
+            """Calculate Intersection over Union."""
+            x1 = max(box1[0], box2[0])
+            y1 = max(box1[1], box2[1])
+            x2 = min(box1[2], box2[2])
+            y2 = min(box1[3], box2[3])
+
+            if x2 <= x1 or y2 <= y1:
+                return 0.0
+
+            intersection = (x2 - x1) * (y2 - y1)
+            area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+            area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+            union = area1 + area2 - intersection
+
+            return intersection / union if union > 0 else 0.0
+
+        # Sort by priority
+        sorted_dets = sorted(all_detections, key=lambda d: priority.get(d['label'], 99))
+
+        keep = []
+        for det in sorted_dets:
+            is_duplicate = False
+            for kept in keep:
+                iou = calc_iou(det['bbox'], kept['bbox'])
+                if iou > iou_threshold:
+                    is_duplicate = True
+                    print(f"      [DEDUP] Removing duplicate {det['label']} (IoU={iou:.2f} with {kept['label']})")
+                    break
+            if not is_duplicate:
+                keep.append(det)
+
+        return keep
 
     def _detect_single_category(self, image: Image.Image, category: str, description: str, img_width: int, img_height: int) -> List[Dict]:
         """Detect a single category, using MERGED exemplar approach if available.

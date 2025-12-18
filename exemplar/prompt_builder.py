@@ -57,7 +57,12 @@ class ExemplarPromptBuilder:
         "street_signs": "street signs",
         "traffic_lights": "traffic lights",
         "tyre_marks": "tire/tyre marks or skid marks",
-        "abandoned_vehicles": "abandoned vehicles"
+        "abandoned_vehicles": "abandoned vehicles",
+        "graffiti": "graffiti (spray paint, tags, vandalism)",
+        "homeless_encampment": "homeless encampments (tents, makeshift shelters)",
+        "homeless_person": "homeless persons",
+        "abandoned_vehicle": "abandoned vehicles",
+        "road_surface_damage": "road surface damage"
     }
 
     def __init__(self, exemplar_manager: ExemplarManager):

@@ -117,7 +117,9 @@ class ExemplarManager:
     VALID_CATEGORIES = [
         "potholes", "alligator_cracks", "longitudinal_cracks", "transverse_cracks",
         "manholes", "damaged_paint", "damaged_crosswalks", "dumped_trash",
-        "street_signs", "traffic_lights", "tyre_marks", "abandoned_vehicles"
+        "street_signs", "traffic_lights", "tyre_marks", "abandoned_vehicles",
+        "graffiti", "homeless_encampment", "homeless_person", "abandoned_vehicle",
+        "road_surface_damage"
     ]
 
     def __init__(
