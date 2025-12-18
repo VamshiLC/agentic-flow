@@ -748,7 +748,7 @@ If you find {category}, output the JSON. If nothing found, output: []"""
             List of detections with bboxes
         """
         try:
-            logger.info(f"Using exemplar-enhanced detection for '{category}'")
+            print(f"      [EXEMPLAR] Using exemplar-enhanced detection for '{category}'")
 
             # Build multi-image prompt with exemplars
             # Use 'contrastive' strategy if you want positive+negative exemplars
@@ -769,8 +769,11 @@ If you find {category}, output the JSON. If nothing found, output: []"""
 
             if not prompt_data.get("has_exemplars"):
                 # No exemplars available, fallback to text-only detection
-                logger.warning(f"No exemplars available for '{category}', using text-only")
+                print(f"      [EXEMPLAR] No exemplars found for '{category}', falling back to text-only")
                 return self._detect_with_text_only(image, category, description, img_width, img_height)
+
+            num_exemplars = len(prompt_data.get("exemplar_images", []))
+            print(f"      [EXEMPLAR] Found {num_exemplars} exemplars for '{category}'")
 
             # Enhance the prompt with image size info and JSON output format
             base_prompt = prompt_data.get("prompt", "")
@@ -784,14 +787,43 @@ OUTPUT FORMAT - Return JSON array with bounding boxes:
 x1,y1 = top-left corner. x2,y2 = bottom-right corner.
 If you find {category} matching the exemplars, output the JSON. If nothing found, output: []"""
 
-            # Check if we have the multi-image detection method
-            if hasattr(self.qwen_detector, 'detect_with_messages'):
-                # Use the multi-image message format
+            # Use detect_with_exemplars for cleaner multi-image handling
+            exemplar_images = prompt_data.get("exemplar_images", [])
+
+            # IMPORTANT: Limit to 2-3 exemplars max - too many confuses the model
+            MAX_EXEMPLARS_FOR_DETECTION = 3
+            if len(exemplar_images) > MAX_EXEMPLARS_FOR_DETECTION:
+                print(f"      [EXEMPLAR] Limiting from {len(exemplar_images)} to {MAX_EXEMPLARS_FOR_DETECTION} exemplars")
+                exemplar_images = exemplar_images[:MAX_EXEMPLARS_FOR_DETECTION]
+
+            if hasattr(self.qwen_detector, 'detect_with_exemplars') and exemplar_images:
+                # Build simpler descriptions for exemplars
+                display_name = self.exemplar_prompt_builder.CATEGORY_DISPLAY_NAMES.get(category, category)
+                exemplar_descriptions = [f"This is a {display_name}" for _ in exemplar_images]
+
+                # Simpler prompt - don't overwhelm model with complex instructions
+                simple_prompt = f"""Look at the example images of {display_name} shown above.
+Now find ALL similar {display_name} in this target image.
+
+Output JSON array with tight bounding boxes:
+[{{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}]
+
+Image size: {img_width} x {img_height} pixels.
+If none found, output: []"""
+
+                print(f"      [EXEMPLAR] Calling detect_with_exemplars with {len(exemplar_images)} images")
+                result = self.qwen_detector.detect_with_exemplars(
+                    target_image=image,
+                    exemplar_images=exemplar_images,
+                    prompt=simple_prompt,
+                    exemplar_descriptions=exemplar_descriptions
+                )
+            elif hasattr(self.qwen_detector, 'detect_with_messages'):
+                # Fallback to message-based detection
                 messages = prompt_data.get("messages", [])
-                all_images = prompt_data.get("all_images", [image])  # Get all images including exemplars
+                all_images = prompt_data.get("all_images", [image])
 
                 if messages and all_images:
-                    # Update the last message with enhanced prompt
                     for msg in reversed(messages):
                         if msg.get("role") == "user":
                             content = msg.get("content", [])
@@ -803,29 +835,19 @@ If you find {category} matching the exemplars, output the JSON. If nothing found
 
                     result = self.qwen_detector.detect_with_messages(messages, all_images)
                 else:
-                    # Fallback to standard detection
                     result = self.qwen_detector.detect(image, enhanced_prompt)
-            elif hasattr(self.qwen_detector, 'detect_with_exemplars'):
-                # Use exemplar-aware detection
-                exemplar_images = prompt_data.get("exemplar_images", [])
-                exemplar_descriptions = prompt_data.get("exemplar_descriptions", [])
-
-                result = self.qwen_detector.detect_with_exemplars(
-                    target_image=image,
-                    exemplar_images=exemplar_images,
-                    prompt=enhanced_prompt,
-                    exemplar_descriptions=exemplar_descriptions
-                )
             else:
                 # Fallback: use standard detection with enhanced prompt
                 result = self.qwen_detector.detect(image, enhanced_prompt)
 
             if not result.get("success"):
-                logger.warning(f"Exemplar detection failed for '{category}', trying text-only")
+                print(f"      [EXEMPLAR] Detection FAILED for '{category}': {result.get('error', 'unknown')}")
                 return self._detect_with_text_only(image, category, description, img_width, img_height)
 
             response_text = result.get("text", "")
+            print(f"      [EXEMPLAR] Model response for '{category}': {response_text[:300]}...")
             detections = self._parse_json_detection_response(response_text, img_width, img_height)
+            print(f"      [EXEMPLAR] Parsed {len(detections)} detections for '{category}'")
 
             # Force correct label
             for d in detections:
@@ -833,12 +855,19 @@ If you find {category} matching the exemplars, output the JSON. If nothing found
                 d['used_exemplars'] = True
 
             if detections:
-                logger.info(f"Exemplar detection found {len(detections)} {category}")
+                print(f"      [EXEMPLAR] SUCCESS: Found {len(detections)} {category}")
+            else:
+                # FALLBACK: Exemplar detection returned nothing, try text-only
+                print(f"      [EXEMPLAR] Returned 0 results, trying text-only fallback...")
+                text_detections = self._detect_with_text_only(image, category, description, img_width, img_height)
+                if text_detections:
+                    print(f"      [FALLBACK] Text-only found {len(text_detections)} {category}")
+                    return text_detections
 
             return detections
 
         except Exception as e:
-            logger.error(f"Exemplar detection error for {category}: {e}")
+            print(f"      [EXEMPLAR] ERROR for {category}: {e}")
             # Fallback to text-only detection
             return self._detect_with_text_only(image, category, description, img_width, img_height)
 
