@@ -897,131 +897,119 @@ If you find {category}, output the JSON. If nothing found, output: []"""
                 merged_img.save(debug_path)
                 print(f"      [SAM3-EXEMPLAR] Saved merged image to {debug_path}")
 
-            # Try Ultralytics SAM3SemanticPredictor
-            try:
-                from ultralytics.models.sam import SAM3SemanticPredictor
-                print(f"      [SAM3-EXEMPLAR] Using Ultralytics SAM3SemanticPredictor")
+            # Use the already-loaded native SAM3 processor with merged image
+            # SAM3 sees exemplar on left, target on right - finds similar patterns
+            display_names = {
+                "potholes": "pothole",
+                "alligator_cracks": "cracked road surface",
+                "longitudinal_cracks": "crack line",
+                "transverse_cracks": "horizontal crack",
+                "block_cracks": "block pattern cracks",
+                "edge_cracks": "edge crack",
+                "manholes": "manhole cover",
+                "damaged_crosswalks": "damaged crosswalk",
+                "graffiti": "graffiti",
+                "road_surface_damage": "road damage"
+            }
+            text_prompt = display_names.get(category, category.replace("_", " "))
 
-                overrides = dict(
-                    conf=self.config.confidence_threshold,
-                    task="segment",
-                    mode="predict",
-                    model="sam3.pt",
-                    verbose=False
-                )
-                predictor = SAM3SemanticPredictor(overrides=overrides)
+            print(f"      [SAM3-EXEMPLAR] Using native SAM3 with merged image, text='{text_prompt}'")
 
-                # Save merged image temporarily
-                import tempfile
-                import os
-                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
-                    merged_img.save(f.name)
-                    temp_path = f.name
+            # Set the merged image in SAM3
+            inference_state = self.sam3_processor.set_image(merged_img)
 
-                try:
-                    # Set merged image
-                    predictor.set_image(temp_path)
+            # Use text prompt on the merged image
+            output = self.sam3_processor.set_text_prompt(
+                state=inference_state,
+                prompt=text_prompt
+            )
 
-                    # Text prompt for the category
-                    display_names = {
-                        "potholes": "pothole",
-                        "alligator_cracks": "cracked road surface",
-                        "longitudinal_cracks": "crack line",
-                        "transverse_cracks": "horizontal crack",
-                        "block_cracks": "block pattern cracks",
-                        "edge_cracks": "edge crack",
-                        "manholes": "manhole cover",
-                        "damaged_crosswalks": "damaged crosswalk",
-                        "graffiti": "graffiti",
-                        "road_surface_damage": "road damage"
-                    }
-                    text_prompt = display_names.get(category, category.replace("_", " "))
+            if output is None:
+                print(f"      [SAM3-EXEMPLAR] SAM3 returned None - no similar patterns found")
+                return []
 
-                    # Run SAM3 with bbox around exemplar (left side) + text prompt
-                    print(f"      [SAM3-EXEMPLAR] Running with exemplar bbox {exemplar_bbox} + text='{text_prompt}'")
+            # Extract masks
+            masks = None
+            scores = []
 
-                    results = predictor(
-                        bboxes=[exemplar_bbox],
-                        texts=[text_prompt],
-                        save=False
-                    )
+            if hasattr(output, 'masks'):
+                masks = output.masks
+            elif isinstance(output, dict) and 'masks' in output:
+                masks = output['masks']
 
-                    detections = []
-                    if results and len(results) > 0:
-                        result = results[0]
+            if hasattr(output, 'scores'):
+                scores = output.scores
+            elif isinstance(output, dict) and 'scores' in output:
+                scores = output['scores']
 
-                        if hasattr(result, 'masks') and result.masks is not None:
-                            masks = result.masks.data.cpu().numpy() if hasattr(result.masks.data, 'cpu') else result.masks.data
-                            boxes = result.boxes.xyxy.cpu().numpy() if hasattr(result, 'boxes') and result.boxes is not None else []
-                            scores = result.boxes.conf.cpu().numpy() if hasattr(result, 'boxes') and result.boxes is not None else []
+            if masks is None or len(masks) == 0:
+                print(f"      [SAM3-EXEMPLAR] SAM3 found 0 masks - no similar patterns found")
+                return []
 
-                            for i, mask in enumerate(masks):
-                                # Get bbox
-                                if i < len(boxes):
-                                    bbox = [int(b) for b in boxes[i].tolist()]
-                                else:
-                                    bbox = self._mask_to_bbox(mask)
+            print(f"      [SAM3-EXEMPLAR] SAM3 found {len(masks)} masks on merged image")
 
-                                x1, y1, x2, y2 = bbox
-                                bbox_center_x = (x1 + x2) / 2
+            detections = []
+            for i, mask in enumerate(masks):
+                # Convert mask to numpy
+                if hasattr(mask, 'cpu'):
+                    mask_np = mask.cpu().numpy()
+                elif hasattr(mask, 'numpy'):
+                    mask_np = mask.numpy()
+                else:
+                    mask_np = np.array(mask)
 
-                                # ONLY keep detections on the RIGHT side (target image)
-                                if bbox_center_x < target_x_offset:
-                                    print(f"      [SAM3-EXEMPLAR] Skipping bbox {bbox} - on exemplar side")
-                                    continue
+                # Ensure 2D
+                while len(mask_np.shape) > 2:
+                    mask_np = mask_np[0]
 
-                                # Translate bbox to original target coordinates
-                                translated_bbox = [
-                                    x1 - target_x_offset,
-                                    y1,
-                                    x2 - target_x_offset,
-                                    y2
-                                ]
+                bbox = self._mask_to_bbox(mask_np)
+                x1, y1, x2, y2 = bbox
+                bbox_center_x = (x1 + x2) / 2
 
-                                # Scale back to original image size
-                                merged_target_w = merged_img.width - target_x_offset
-                                merged_target_h = merged_img.height
-                                scale_x = img_width / merged_target_w
-                                scale_y = img_height / merged_target_h
+                # ONLY keep detections on the RIGHT side (target image portion)
+                if bbox_center_x < target_x_offset:
+                    print(f"      [SAM3-EXEMPLAR] Skipping mask {i} - on exemplar side")
+                    continue
 
-                                final_bbox = [
-                                    max(0, int(translated_bbox[0] * scale_x)),
-                                    max(0, int(translated_bbox[1] * scale_y)),
-                                    min(img_width, int(translated_bbox[2] * scale_x)),
-                                    min(img_height, int(translated_bbox[3] * scale_y))
-                                ]
+                # Translate bbox to original target coordinates
+                translated_bbox = [
+                    x1 - target_x_offset,
+                    y1,
+                    x2 - target_x_offset,
+                    y2
+                ]
 
-                                score = float(scores[i]) if i < len(scores) else 0.8
+                # Scale back to original image size
+                merged_target_w = merged_img.width - target_x_offset
+                merged_target_h = merged_img.height
+                scale_x = img_width / merged_target_w
+                scale_y = img_height / merged_target_h
 
-                                if score >= self.config.confidence_threshold and final_bbox[2] > final_bbox[0] and final_bbox[3] > final_bbox[1]:
-                                    detections.append({
-                                        'label': category,
-                                        'bbox': final_bbox,
-                                        'confidence': score,
-                                        'used_exemplars': True,
-                                        'method': 'sam3_merged_exemplar'
-                                    })
-                                    print(f"      [SAM3-EXEMPLAR] Found: {final_bbox} score={score:.2f}")
+                final_bbox = [
+                    max(0, int(translated_bbox[0] * scale_x)),
+                    max(0, int(translated_bbox[1] * scale_y)),
+                    min(img_width, int(translated_bbox[2] * scale_x)),
+                    min(img_height, int(translated_bbox[3] * scale_y))
+                ]
 
-                    print(f"      [SAM3-EXEMPLAR] SAM3 found {len(detections)} instances in target")
+                score = float(scores[i]) if i < len(scores) else 0.7
 
-                    if detections:
-                        detections = self._nms_detections(detections, iou_threshold=0.3)
-                        return detections
+                if score >= self.config.confidence_threshold and final_bbox[2] > final_bbox[0] and final_bbox[3] > final_bbox[1]:
+                    detections.append({
+                        'label': category,
+                        'bbox': final_bbox,
+                        'confidence': score,
+                        'used_exemplars': True,
+                        'method': 'sam3_merged_exemplar'
+                    })
+                    print(f"      [SAM3-EXEMPLAR] Found in target: {final_bbox} score={score:.2f}")
 
-                finally:
-                    os.unlink(temp_path)
+            print(f"      [SAM3-EXEMPLAR] {len(detections)} detections in target region")
 
-            except ImportError:
-                print(f"      [SAM3-EXEMPLAR] Ultralytics SAM3SemanticPredictor not available")
-            except Exception as e:
-                print(f"      [SAM3-EXEMPLAR] SAM3SemanticPredictor error: {e}")
-                import traceback
-                traceback.print_exc()
+            if detections:
+                detections = self._nms_detections(detections, iou_threshold=0.3)
 
-            # Fallback to SAM3 text prompt
-            print(f"      [SAM3-EXEMPLAR] Falling back to SAM3 text prompt")
-            return self._detect_with_sam3_text(image, category, description, img_width, img_height)
+            return detections
 
         except Exception as e:
             print(f"      [SAM3-EXEMPLAR] ERROR for {category}: {e}")
