@@ -622,59 +622,59 @@ Image size: {img_width} x {img_height} pixels.
 
 If NO potholes exist, output: []"""
 
-        # Special prompts for CRACK detection - must be TIGHT bounding boxes
+        # Special prompts for CRACK detection
         elif category == "longitudinal_cracks":
-            prompt = f"""Find longitudinal cracks in this road image.
+            prompt = f"""Look carefully at the ROAD SURFACE for longitudinal cracks.
 
-Longitudinal cracks are NARROW cracks running PARALLEL to the road direction.
+Longitudinal cracks look like:
+- Long dark lines running along the direction of the road
+- Single crack lines or parallel crack lines
+- Usually appear as dark lines on gray asphalt
+- Run from near to far in the image (following road direction)
+- May branch or have smaller cracks alongside
 
-CRITICAL RULES:
-1. Bounding box must be TIGHT around the actual crack only
-2. Box WIDTH should be narrow (cracks are thin lines, not wide areas)
-3. Do NOT draw boxes spanning the entire image width
-4. Each crack should have its own separate bounding box
+Scan the entire road surface from bottom to top of the image.
 
-If crack runs vertically in image: box should be NARROW width, taller height
-If crack runs horizontally: box should be wider, but NARROW height
-
-Output JSON with TIGHT bounding boxes:
+Output JSON array with bounding boxes around each crack:
 [{{"label": "longitudinal_cracks", "bbox_2d": [x1, y1, x2, y2]}}]
 
 Image size: {img_width} x {img_height} pixels.
-If NO longitudinal cracks, output: []"""
+If NO longitudinal cracks visible, output: []"""
 
         elif category == "transverse_cracks":
-            prompt = f"""Find transverse cracks in this road image.
+            prompt = f"""Look carefully at the ROAD SURFACE for transverse cracks.
 
-Transverse cracks run ACROSS/PERPENDICULAR to the road direction.
+Transverse cracks look like:
+- Dark lines running ACROSS the road (left to right)
+- Perpendicular to the direction of travel
+- Single lines or groups of parallel lines crossing the road
+- Usually appear as horizontal dark lines on gray asphalt
 
-CRITICAL RULES:
-1. Bounding box must be TIGHT around the actual crack only
-2. Box HEIGHT should be narrow (cracks are thin lines)
-3. Do NOT draw boxes spanning large areas
-4. Each crack should have its own separate bounding box
+Scan the road surface for any cracks running across/horizontally.
 
-Output JSON with TIGHT bounding boxes:
+Output JSON array with bounding boxes around each crack:
 [{{"label": "transverse_cracks", "bbox_2d": [x1, y1, x2, y2]}}]
 
 Image size: {img_width} x {img_height} pixels.
-If NO transverse cracks, output: []"""
+If NO transverse cracks visible, output: []"""
 
         elif category == "alligator_cracks":
-            prompt = f"""Find alligator cracks (fatigue cracks) in this road image.
+            prompt = f"""Look carefully at the ROAD SURFACE in this image for alligator cracks.
 
-Alligator cracks form interconnected patterns like alligator skin or spider web.
+Alligator cracks look like:
+- Network of interconnected cracks forming a web/mesh pattern
+- Resembles alligator skin or dried mud
+- Dark lines forming irregular polygon shapes on gray asphalt
+- Usually found in areas with heavy traffic or old pavement
+- Can be small patches or large areas of cracked surface
 
-CRITICAL RULES:
-1. Bounding box should cover ONLY the cracked area
-2. Do NOT include undamaged road surface in the box
-3. Box should fit tightly around the pattern of cracks
+Look at the asphalt/road surface. Find ANY areas where you see this cracked pattern.
 
-Output JSON with TIGHT bounding boxes:
+Output JSON array with bounding boxes around each cracked area:
 [{{"label": "alligator_cracks", "bbox_2d": [x1, y1, x2, y2]}}]
 
 Image size: {img_width} x {img_height} pixels.
-If NO alligator cracks, output: []"""
+If NO alligator cracks visible on road, output: []"""
 
         elif category == "damaged_crosswalks":
             prompt = f"""Find damaged or faded crosswalks in this road image.
