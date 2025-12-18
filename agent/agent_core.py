@@ -579,6 +579,8 @@ class InfrastructureDetectionAgentCore:
         1. Potholes/cracks should not be in top 30% of image (sky/buildings)
         2. Potholes/cracks should not cover more than 15% of image
         3. Cracks should be thin (one dimension small)
+        4. Cracks should NOT be tall vertical strips (those are poles/trees, not road cracks)
+        5. Road defects must be mostly in lower half of image (on road surface)
         """
         filtered = []
         img_area = img_width * img_height
@@ -598,21 +600,36 @@ class InfrastructureDetectionAgentCore:
 
             # Check if this is a road defect category
             if label in road_defect_categories:
-                # Rule 1: Must be in lower 70% of image (road area)
-                if box_center_y < img_height * 0.3:
-                    print(f"    [REJECT] {label}: in sky/building area (y={box_center_y:.0f} < {img_height*0.3:.0f})")
+                # Rule 1: Box must START in lower 50% of image (road surface)
+                # Top of box (y1) should be in lower half
+                if y1 < img_height * 0.4:
+                    print(f"    [REJECT] {label}: starts too high (y1={y1:.0f} < {img_height*0.4:.0f})")
                     continue
 
-                # Rule 2: Must not be too large (max 15% of image)
-                if box_area > img_area * 0.15:
-                    print(f"    [REJECT] {label}: too large ({box_area/img_area*100:.1f}% > 15%)")
+                # Rule 2: Must not be too large (max 10% of image for cracks)
+                max_area_pct = 0.10 if 'crack' in label else 0.15
+                if box_area > img_area * max_area_pct:
+                    print(f"    [REJECT] {label}: too large ({box_area/img_area*100:.1f}% > {max_area_pct*100:.0f}%)")
                     continue
 
-                # Rule 3: For cracks, must be thin (one dimension < 20% of image)
+                # Rule 3: Cracks should NOT be tall vertical strips
+                # Height should not be more than 3x width (vertical = poles/trees)
                 if 'crack' in label:
-                    min_dim = min(box_width, box_height)
-                    if min_dim > min(img_width, img_height) * 0.2:
-                        print(f"    [REJECT] {label}: crack too thick (min_dim={min_dim:.0f})")
+                    aspect_ratio = box_height / max(box_width, 1)
+                    if aspect_ratio > 3:
+                        print(f"    [REJECT] {label}: too vertical (aspect={aspect_ratio:.1f} > 3, likely pole/tree)")
+                        continue
+
+                    # Also reject if height spans more than 50% of image
+                    if box_height > img_height * 0.5:
+                        print(f"    [REJECT] {label}: too tall ({box_height:.0f} > {img_height*0.5:.0f})")
+                        continue
+
+                # Rule 4: For potholes, should be roughly square-ish (not super elongated)
+                if 'pothole' in label:
+                    aspect_ratio = max(box_width, box_height) / max(min(box_width, box_height), 1)
+                    if aspect_ratio > 5:
+                        print(f"    [REJECT] {label}: too elongated (aspect={aspect_ratio:.1f})")
                         continue
 
             filtered.append(det)
