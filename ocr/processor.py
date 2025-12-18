@@ -1,8 +1,13 @@
 """
 Image and Video Processing for License Plate OCR
 
+Architecture:
+- SAM3: Detection + Tracking (native video tracking when available)
+- Qwen3-VL: OCR (read text from cropped plates)
+- IoU Tracker: Fallback when SAM3 native tracking unavailable
+
 - process_image(): Single image OCR
-- process_video(): Video frame OCR
+- process_video(): Video frame OCR with tracking
 - Output saving (JSON, annotated images/video)
 """
 
@@ -18,7 +23,7 @@ import numpy as np
 
 from .license_plate_agent import LicensePlateOCR
 from .utils import draw_plate_detections, create_plate_summary, pil_to_cv2
-from .tracker import PlateTracker
+from .tracker import PlateTracker  # IoU-based fallback tracker
 
 logger = logging.getLogger(__name__)
 
@@ -103,10 +108,15 @@ def process_video(
     save_video: bool = True,
     save_json: bool = True,
     use_quantization: bool = False,
-    enable_tracking: bool = True
+    enable_tracking: bool = True,
+    use_sam3: bool = True
 ) -> Dict:
     """
     Process video for license plate OCR with tracking.
+
+    Tracking modes:
+    1. SAM3 native tracking (if available) - best accuracy
+    2. IoU-based tracking (fallback) - still works well
 
     Args:
         video_path: Path to input video
@@ -118,6 +128,7 @@ def process_video(
         save_json: Save JSON results
         use_quantization: Use 8-bit quantization
         enable_tracking: Enable plate tracking across frames with voting
+        use_sam3: Use SAM3 for detection (recommended)
 
     Returns:
         Summary results dict
@@ -131,14 +142,23 @@ def process_video(
 
     # Initialize OCR agent if not provided
     if ocr_agent is None:
-        ocr_agent = LicensePlateOCR(use_quantization=use_quantization)
+        ocr_agent = LicensePlateOCR(
+            use_quantization=use_quantization,
+            use_sam3=use_sam3
+        )
 
-    # Initialize plate tracker
-    tracker = PlateTracker(
-        iou_threshold=0.3,
-        min_readings=2,
-        max_frames_missing=5
-    ) if enable_tracking else None
+    # Check if SAM3 has native tracking
+    has_native_tracking = ocr_agent.has_native_tracking()
+
+    # Initialize IoU tracker as fallback (when SAM3 native tracking not available)
+    iou_tracker = None
+    if enable_tracking and not has_native_tracking:
+        iou_tracker = PlateTracker(
+            iou_threshold=0.3,
+            min_readings=2,
+            max_frames_missing=5
+        )
+        logger.info("Using IoU-based tracking (SAM3 native tracking not available)")
 
     # Open video
     cap = cv2.VideoCapture(video_path)
@@ -146,6 +166,14 @@ def process_video(
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    # Determine tracking mode
+    if has_native_tracking:
+        tracking_mode = "SAM3 Native"
+    elif iou_tracker:
+        tracking_mode = "IoU-based"
+    else:
+        tracking_mode = "Disabled"
 
     print(f"\n{'='*60}")
     print("LICENSE PLATE OCR - Video Processing")
@@ -155,8 +183,12 @@ def process_video(
     print(f"Video FPS: {video_fps:.1f}")
     print(f"Processing FPS: {target_fps}")
     print(f"Resolution: {width}x{height}")
-    print(f"Tracking: {'Enabled' if enable_tracking else 'Disabled'}")
+    print(f"Detection: {'SAM3' if ocr_agent.sam3_available else 'Qwen3-VL'}")
+    print(f"Tracking: {tracking_mode}")
     print(f"{'='*60}\n")
+
+    # Reset tracker for new video
+    ocr_agent.reset_tracker()
 
     # Calculate frame interval
     frame_interval = max(1, int(video_fps / target_fps))
@@ -179,6 +211,7 @@ def process_video(
     all_plates = []
     frame_idx = 0
     processed_count = 0
+    first_frame_initialized = False
 
     pbar = tqdm(total=frames_to_process, desc="Processing")
 
@@ -192,12 +225,17 @@ def process_video(
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             pil_image = Image.fromarray(frame_rgb)
 
-            # Run OCR
-            result = ocr_agent.detect_and_read(pil_image)
+            # Initialize video tracking with first frame
+            if not first_frame_initialized:
+                ocr_agent.init_video(pil_image)
+                first_frame_initialized = True
 
-            # Update tracker if enabled
-            if tracker and result['num_plates'] > 0:
-                tracked_plates = tracker.update(processed_count, result['plates'])
+            # Run detection + OCR (pass frame_idx for tracking)
+            result = ocr_agent.detect_and_read(pil_image, frame_idx=processed_count)
+
+            # Use IoU tracker if SAM3 native tracking not available
+            if iou_tracker and result['num_plates'] > 0:
+                tracked_plates = iou_tracker.update(processed_count, result['plates'])
                 result['plates'] = tracked_plates
 
             # Store results
@@ -235,7 +273,10 @@ def process_video(
             pbar.update(1)
 
             # Update progress bar
-            tracked_count = len(tracker.tracked_plates) if tracker else len(all_plates)
+            if iou_tracker:
+                tracked_count = len(iou_tracker.tracked_plates)
+            else:
+                tracked_count = len(all_plates)
             pbar.set_postfix({
                 'detections': len(all_plates),
                 'tracked': tracked_count
@@ -251,8 +292,17 @@ def process_video(
 
     # Get tracked plates with voting results
     tracked_results = []
-    if tracker:
-        tracked_results = tracker.get_all_tracked_plates()
+    if iou_tracker:
+        tracked_results = iou_tracker.get_all_tracked_plates()
+    elif has_native_tracking and ocr_agent.sam3_tracker:
+        # Get tracked plates from SAM3
+        sam3_tracked = ocr_agent.sam3_tracker.get_tracked_plates()
+        for track_id, track_data in sam3_tracked.items():
+            tracked_results.append({
+                'track_id': track_id,
+                'bboxes': track_data.get('bboxes', []),
+                'frames': track_data.get('frames', [])
+            })
 
     # Create summary
     summary = create_plate_summary(all_plates)
@@ -261,15 +311,20 @@ def process_video(
     summary['frames_with_plates'] = sum(1 for r in all_results if r['num_plates'] > 0)
 
     # Add tracking summary
-    if tracker and tracked_results:
+    if tracked_results:
         summary['tracking_enabled'] = True
+        summary['tracking_mode'] = tracking_mode
         summary['unique_plates_tracked'] = len(tracked_results)
         summary['tracked_plates'] = tracked_results
 
-        # Get final plate texts from tracking (voted results)
-        summary['final_plate_texts'] = [t['plate_text'] for t in tracked_results]
+        # Get final plate texts from tracking (voted results for IoU tracker)
+        if iou_tracker:
+            summary['final_plate_texts'] = [t['plate_text'] for t in tracked_results if t.get('plate_text')]
+        else:
+            summary['final_plate_texts'] = []
     else:
         summary['tracking_enabled'] = False
+        summary['tracking_mode'] = "Disabled"
 
     # Save JSON results
     if save_json:
@@ -295,14 +350,17 @@ def process_video(
     print(f"Frames with plates: {summary['frames_with_plates']}")
     print(f"Total detections: {summary['total_plates']}")
 
-    if tracker and tracked_results:
-        print(f"\n--- TRACKING RESULTS (with voting) ---")
+    if tracked_results:
+        print(f"\n--- TRACKING RESULTS ({tracking_mode}) ---")
         print(f"Unique plates tracked: {len(tracked_results)}")
-        print(f"\nFinal Plate Numbers:")
-        for t in tracked_results:
-            print(f"  - {t['plate_text']} (confidence: {t['confidence']:.2f}, votes: {t['vote_count']}/{t['total_readings']})")
-            if t.get('all_readings'):
-                print(f"    All readings: {t['all_readings']}")
+        if iou_tracker:
+            print(f"\nFinal Plate Numbers (with voting):")
+            for t in tracked_results:
+                print(f"  - {t['plate_text']} (confidence: {t['confidence']:.2f}, votes: {t['vote_count']}/{t['total_readings']})")
+                if t.get('all_readings'):
+                    print(f"    All readings: {t['all_readings']}")
+        else:
+            print(f"\nTracked {len(tracked_results)} unique plates across video")
     else:
         if summary['plate_texts']:
             print(f"\nDetected plate numbers:")

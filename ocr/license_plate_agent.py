@@ -1,12 +1,11 @@
 """
 License Plate Detection Agent with OCR
 
-Two-stage approach for better accuracy:
-1. Detect license plates using Qwen3-VL
-2. Segment plates using SAM3 (optional)
-3. Crop plate region and run OCR using Qwen3-VL
+Architecture:
+- SAM3: Detection + Tracking (text prompt: "license plate")
+- Qwen3-VL: OCR (read text from cropped plates)
 
-Reuses existing model loaders from the project.
+Falls back to Qwen3-VL for detection if SAM3 unavailable.
 """
 
 import re
@@ -24,6 +23,7 @@ from .prompts import (
     build_ocr_prompt,
     build_combined_detection_ocr_prompt
 )
+from .sam3_tracker import SAM3PlateTracker
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +33,10 @@ class LicensePlateOCR:
     License plate detection and OCR agent.
 
     Architecture:
-    - Qwen3-VL: Detects plates + performs OCR (reused from existing code)
-    - SAM3: Segments plate regions for precise masks (reused from existing code)
+    - SAM3: Detection + Tracking (with text prompt "license plate")
+    - Qwen3-VL: OCR (read text from cropped plates)
 
-    Two modes:
-    1. two_stage=True (default): Detect -> Crop -> OCR (better accuracy)
-    2. two_stage=False: Combined detection + OCR in single pass (faster)
+    Falls back to Qwen3-VL for detection if SAM3 is unavailable.
     """
 
     def __init__(
@@ -47,7 +45,7 @@ class LicensePlateOCR:
         device: Optional[str] = None,
         use_quantization: bool = False,
         low_memory: bool = False,
-        two_stage: bool = True,
+        use_sam3: bool = True,
         plate_padding: float = 0.1
     ):
         """
@@ -58,24 +56,44 @@ class LicensePlateOCR:
             device: cuda/cpu (auto-detect if None)
             use_quantization: Use 8-bit quantization for lower memory
             low_memory: Enable additional memory optimizations
-            two_stage: Use two-stage detection+OCR (recommended for accuracy)
+            use_sam3: Use SAM3 for detection/tracking (recommended)
             plate_padding: Padding ratio when cropping plate (0.1 = 10%)
         """
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.two_stage = two_stage
         self.plate_padding = plate_padding
         self.use_quantization = use_quantization
+        self.use_sam3 = use_sam3
 
         print(f"\n{'='*60}")
         print("LICENSE PLATE OCR - Initializing")
         print(f"{'='*60}")
         print(f"Device: {self.device}")
-        print(f"Mode: {'Two-stage (accurate)' if two_stage else 'Single-pass (fast)'}")
         print(f"Quantization: {'Enabled' if use_quantization else 'Disabled'}")
         print(f"{'='*60}\n")
 
-        # Load Qwen3-VL (shared for detection and OCR)
-        print("Loading Qwen3-VL model...")
+        # Initialize SAM3 for detection + tracking
+        self.sam3_tracker = None
+        self.sam3_available = False
+
+        if use_sam3:
+            print("Loading SAM3 for detection + tracking...")
+            try:
+                self.sam3_tracker = SAM3PlateTracker(
+                    device=self.device,
+                    confidence_threshold=0.5,
+                    text_prompt="license plate"
+                )
+                self.sam3_available = self.sam3_tracker.is_available()
+                if self.sam3_available:
+                    print(f"✓ SAM3 loaded (native tracking: {self.sam3_tracker.has_native_tracking()})")
+                else:
+                    print("⚠ SAM3 not available, using Qwen3-VL for detection")
+            except Exception as e:
+                logger.warning(f"Failed to load SAM3: {e}")
+                print("⚠ SAM3 failed to load, using Qwen3-VL for detection")
+
+        # Load Qwen3-VL for OCR (and detection fallback)
+        print("Loading Qwen3-VL model for OCR...")
         self.qwen_detector = Qwen3VLDirectDetector(
             model_name=model_name,
             device=device,
@@ -83,23 +101,23 @@ class LicensePlateOCR:
             low_memory=low_memory
         )
 
-        # SAM3 not needed for OCR - just detection + text reading
-        self.sam3_processor = None
-        self.sam3_available = False
-
         print(f"\n{'='*60}")
         print("LICENSE PLATE OCR - Ready")
+        print(f"Detection: {'SAM3' if self.sam3_available else 'Qwen3-VL'}")
+        print(f"OCR: Qwen3-VL")
         print(f"{'='*60}\n")
 
     def detect_and_read(
         self,
-        image: Union[Image.Image, str, np.ndarray]
+        image: Union[Image.Image, str, np.ndarray],
+        frame_idx: Optional[int] = None
     ) -> Dict:
         """
         Detect license plates and extract text.
 
         Args:
             image: PIL Image, numpy array, or path to image
+            frame_idx: Frame index for video tracking (optional)
 
         Returns:
             dict: {
@@ -110,7 +128,8 @@ class LicensePlateOCR:
                         'plate_text': str,
                         'ocr_confidence': float,
                         'state': str,
-                        'format': str
+                        'format': str,
+                        'track_id': int (if tracking enabled)
                     }
                 ],
                 'num_plates': int
@@ -122,22 +141,83 @@ class LicensePlateOCR:
         elif isinstance(image, np.ndarray):
             image = Image.fromarray(image).convert('RGB')
 
-        if self.two_stage:
-            return self._detect_two_stage(image)
+        # Use SAM3 for detection if available
+        if self.sam3_available and self.sam3_tracker:
+            return self._detect_with_sam3(image, frame_idx)
         else:
-            return self._detect_single_stage(image)
+            # Fallback to Qwen3-VL for detection
+            return self._detect_with_qwen(image)
 
-    def _detect_two_stage(
+    def _detect_with_sam3(
+        self,
+        image: Image.Image,
+        frame_idx: Optional[int] = None
+    ) -> Dict:
+        """
+        Detect plates using SAM3 and read text using Qwen3-VL.
+
+        SAM3 handles detection + tracking, Qwen handles OCR.
+        """
+        logger.info("SAM3: Detecting and tracking plates...")
+
+        # Get detections from SAM3
+        detections = self.sam3_tracker.detect_and_track(image, frame_idx)
+
+        if len(detections) == 0:
+            logger.info("No plates detected by SAM3")
+            return {'plates': [], 'num_plates': 0}
+
+        logger.info(f"SAM3 detected {len(detections)} plate(s)")
+
+        # For each detection, crop and run OCR with Qwen
+        enhanced_plates = []
+        for i, det in enumerate(detections):
+            bbox = det.get('bbox', [])
+            if len(bbox) != 4:
+                continue
+
+            logger.info(f"Qwen OCR: Reading plate {i+1}/{len(detections)}...")
+
+            # Crop plate region with padding
+            cropped_plate = self._crop_plate_region(image, bbox)
+
+            # Run OCR on cropped plate using Qwen
+            ocr_result = self._read_plate_text(cropped_plate)
+
+            plate = {
+                'bbox': bbox,
+                'confidence': det.get('confidence', 0.8),
+                'plate_text': ocr_result.get('text', 'UNREADABLE'),
+                'ocr_confidence': ocr_result.get('confidence', 0.0),
+                'state': ocr_result.get('state', 'Unknown'),
+                'format': ocr_result.get('format', 'Unknown'),
+                'mask': det.get('mask'),
+                'color': (255, 165, 0)
+            }
+
+            # Add track_id if available (from SAM3 tracking)
+            if 'track_id' in det:
+                plate['track_id'] = det['track_id']
+
+            enhanced_plates.append(plate)
+            logger.info(f"  Plate text: {plate['plate_text']} (conf: {plate['ocr_confidence']:.2f})")
+
+        return {
+            'plates': enhanced_plates,
+            'num_plates': len(enhanced_plates)
+        }
+
+    def _detect_with_qwen(
         self,
         image: Image.Image
     ) -> Dict:
         """
-        Two-stage detection: Detect plates -> Crop -> OCR
+        Detect plates using Qwen3-VL (fallback when SAM3 unavailable).
 
-        More accurate OCR because the model focuses only on the plate region.
+        Two-stage: Detect -> Crop -> OCR
         """
         # Stage 1: Detect plate locations
-        logger.info("Stage 1: Detecting license plates...")
+        logger.info("Qwen: Detecting license plates...")
         detection_prompt = build_plate_detection_prompt()
         detection_result = self.qwen_detector.detect(image, detection_prompt)
 
@@ -161,7 +241,7 @@ class LicensePlateOCR:
         enhanced_plates = []
         for i, plate in enumerate(plates):
             bbox = plate['bbox']
-            logger.info(f"Stage 2: Reading plate {i+1}/{len(plates)}...")
+            logger.info(f"Qwen OCR: Reading plate {i+1}/{len(plates)}...")
 
             # Crop plate region with padding
             cropped_plate = self._crop_plate_region(image, bbox)
@@ -434,10 +514,28 @@ class LicensePlateOCR:
 
         return plates
 
+    def reset_tracker(self):
+        """Reset tracker for new video."""
+        if self.sam3_tracker:
+            self.sam3_tracker.reset()
+
+    def init_video(self, first_frame: Union[Image.Image, np.ndarray]):
+        """Initialize video tracking with first frame."""
+        if self.sam3_tracker:
+            self.sam3_tracker.init_video(first_frame)
+
+    def has_native_tracking(self) -> bool:
+        """Check if native SAM3 tracking is available."""
+        if self.sam3_tracker:
+            return self.sam3_tracker.has_native_tracking()
+        return False
+
     def cleanup(self):
         """Clean up models and free GPU memory."""
         if hasattr(self, 'qwen_detector'):
             self.qwen_detector.cleanup()
+        if hasattr(self, 'sam3_tracker') and self.sam3_tracker:
+            self.sam3_tracker.cleanup()
         if self.device == "cuda":
             torch.cuda.empty_cache()
             print("GPU memory cleared")

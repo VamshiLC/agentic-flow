@@ -2,21 +2,25 @@
 """
 License Plate OCR - Command Line Interface
 
-Detect and read vehicle license plates using Qwen3-VL + SAM3.
+Architecture:
+- SAM3: Detection + Tracking (when available)
+- Qwen3-VL: OCR (read text from cropped plates)
+- IoU Tracker: Fallback when SAM3 native tracking unavailable
+
 Optimized for North American plate formats (US, Canada, Mexico).
 
 Usage:
     # Single image
     python run_ocr.py --input vehicle.jpg --output ./results
 
-    # Video processing
+    # Video processing with tracking
     python run_ocr.py --input dashcam.mp4 --output ./results --fps 1
 
     # With quantization (lower memory)
     python run_ocr.py --input video.mp4 --output ./results --quantize
 
-    # Without SAM3 masks (faster)
-    python run_ocr.py --input image.jpg --output ./results --no-sam3
+    # Without SAM3 (use Qwen for detection)
+    python run_ocr.py --input video.mp4 --output ./results --no-sam3
 """
 
 import argparse
@@ -35,7 +39,8 @@ def main():
 Examples:
   python run_ocr.py --input car.jpg --output ./results
   python run_ocr.py --input dashcam.mp4 --output ./results --fps 2
-  python run_ocr.py --input video.mp4 --output ./results --quantize --no-sam3
+  python run_ocr.py --input video.mp4 --output ./results --quantize
+  python run_ocr.py --input video.mp4 --output ./results --no-sam3
         """
     )
 
@@ -59,9 +64,14 @@ Examples:
         help="Target FPS for video processing (default: 1.0)"
     )
     parser.add_argument(
-        "--single-stage",
+        "--no-sam3",
         action="store_true",
-        help="Use single-stage detection+OCR (faster but less accurate)"
+        help="Disable SAM3 (use Qwen3-VL for detection)"
+    )
+    parser.add_argument(
+        "--no-tracking",
+        action="store_true",
+        help="Disable plate tracking across frames"
     )
 
     # Memory options
@@ -122,7 +132,7 @@ Examples:
         device=args.device,
         use_quantization=args.quantize,
         low_memory=args.low_memory,
-        two_stage=not args.single_stage
+        use_sam3=not args.no_sam3
     )
 
     # Process based on input type
@@ -135,7 +145,9 @@ Examples:
             ocr_agent=ocr_agent,
             save_frames=not args.no_frames,
             save_video=not args.no_video,
-            save_json=True
+            save_json=True,
+            enable_tracking=not args.no_tracking,
+            use_sam3=not args.no_sam3
         )
     else:
         print(f"\nProcessing image: {args.input}")
