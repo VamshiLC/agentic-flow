@@ -15,52 +15,57 @@ def build_plate_detection_prompt() -> str:
     """
     return """You are a vehicle license plate detection expert specializing in North American plates.
 
-YOUR TASK: Detect ALL visible vehicle license/number plates in this image.
+YOUR TASK: Detect ONLY actual vehicle license/number plates in this image.
 
-WHAT TO LOOK FOR:
-- Rectangular plates on the front or rear of vehicles
-- North American plate characteristics:
-  * US plates: Typically 12"x6", state name at top, alphanumeric characters
-  * Canadian plates: Similar size, province name, alphanumeric format
-  * Mexican plates: State abbreviation, alphanumeric with hyphens
-- Plates with letters, numbers, or combination
-- Standard government-issued registration plates
+WHAT IS A LICENSE PLATE:
+- RECTANGULAR metal or plastic plate (NOT round or circular)
+- Contains ALPHANUMERIC characters (letters AND/OR numbers)
+- Has a FLAT surface with printed/embossed text
+- Usually has a state/province name at top or bottom
+- Standard size: approximately 12"x6" (wider than tall)
+- Colors: white, yellow, or light colored background with dark text
+- Mounted FLAT on vehicle bumper (front or rear)
 
 PLATE LOCATIONS:
-- Front bumper area of vehicles
-- Rear bumper/trunk area of vehicles
-- Mounted on brackets or recessed in bumper
+- Front bumper center area
+- Rear bumper/trunk center area
+- Mounted horizontally (not tilted or vertical)
+
+CRITICAL - DO NOT DETECT THESE AS PLATES:
+- TYRES/WHEELS (round, black rubber - NOT a plate!)
+- Hubcaps or wheel rims (circular metal - NOT a plate!)
+- Headlights or taillights (lights - NOT a plate!)
+- Bumper stickers or decals
+- Vehicle manufacturer logos/badges
+- Dealer name plates or frames
+- Exhaust pipes or grilles
+- Side mirrors
+- Door handles
+- ANY circular or round objects
+- ANY black rubber objects
+- Building numbers or street signs
 
 DETECTION RULES:
-1. Only detect clearly visible plates where characters might be readable
-2. Include plates that are partially visible if significant portion shows
-3. Detect both front and rear plates if visible
-4. Include plates at various angles if characters are potentially distinguishable
-5. Minimum confidence 0.5 for detection
-
-DO NOT DETECT:
-- Dealer logos or temporary paper plates (unless clearly readable)
-- Bumper stickers or decorative plates
-- Vehicle manufacturer badges
-- Building numbers or street signs
-- Plates that are too blurry or too far away to read
+1. ONLY detect rectangular plates with visible text
+2. Plate must have alphanumeric characters visible
+3. Ignore anything that is round, circular, or wheel-shaped
+4. Ignore anything that is black rubber (tyres)
+5. Minimum confidence 0.6 for detection
+6. If unsure, do NOT detect it
 
 OUTPUT FORMAT:
 For each license plate detected:
 Defect: license_plate, Box: [x1, y1, x2, y2], Confidence: <0.0-1.0>
 
 Where coordinates are in 0-1000 scale (normalized to image dimensions).
-x1, y1 = top-left corner
-x2, y2 = bottom-right corner
 
 EXAMPLES:
 Defect: license_plate, Box: [450, 680, 550, 720], Confidence: 0.95
 Defect: license_plate, Box: [120, 400, 280, 450], Confidence: 0.82
-Defect: license_plate, Box: [700, 550, 850, 600], Confidence: 0.78
 
 If NO license plates are visible: "No defects detected"
 
-Now analyze this image for license plates:"""
+Now analyze this image for license plates ONLY (not tyres, wheels, or other parts):"""
 
 
 def build_ocr_prompt() -> str:

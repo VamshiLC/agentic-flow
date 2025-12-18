@@ -18,6 +18,7 @@ import numpy as np
 
 from .license_plate_agent import LicensePlateOCR
 from .utils import draw_plate_detections, create_plate_summary, pil_to_cv2
+from .tracker import PlateTracker
 
 logger = logging.getLogger(__name__)
 
@@ -101,10 +102,11 @@ def process_video(
     save_frames: bool = True,
     save_video: bool = True,
     save_json: bool = True,
-    use_quantization: bool = False
+    use_quantization: bool = False,
+    enable_tracking: bool = True
 ) -> Dict:
     """
-    Process video for license plate OCR.
+    Process video for license plate OCR with tracking.
 
     Args:
         video_path: Path to input video
@@ -115,6 +117,7 @@ def process_video(
         save_video: Save annotated video
         save_json: Save JSON results
         use_quantization: Use 8-bit quantization
+        enable_tracking: Enable plate tracking across frames with voting
 
     Returns:
         Summary results dict
@@ -129,6 +132,13 @@ def process_video(
     # Initialize OCR agent if not provided
     if ocr_agent is None:
         ocr_agent = LicensePlateOCR(use_quantization=use_quantization)
+
+    # Initialize plate tracker
+    tracker = PlateTracker(
+        iou_threshold=0.3,
+        min_readings=2,
+        max_frames_missing=5
+    ) if enable_tracking else None
 
     # Open video
     cap = cv2.VideoCapture(video_path)
@@ -145,6 +155,7 @@ def process_video(
     print(f"Video FPS: {video_fps:.1f}")
     print(f"Processing FPS: {target_fps}")
     print(f"Resolution: {width}x{height}")
+    print(f"Tracking: {'Enabled' if enable_tracking else 'Disabled'}")
     print(f"{'='*60}\n")
 
     # Calculate frame interval
@@ -184,6 +195,11 @@ def process_video(
             # Run OCR
             result = ocr_agent.detect_and_read(pil_image)
 
+            # Update tracker if enabled
+            if tracker and result['num_plates'] > 0:
+                tracked_plates = tracker.update(processed_count, result['plates'])
+                result['plates'] = tracked_plates
+
             # Store results
             frame_result = {
                 'frame_index': frame_idx,
@@ -218,10 +234,11 @@ def process_video(
             processed_count += 1
             pbar.update(1)
 
-            # Update progress bar with plate count
+            # Update progress bar
+            tracked_count = len(tracker.tracked_plates) if tracker else len(all_plates)
             pbar.set_postfix({
-                'plates': len(all_plates),
-                'frames_with_plates': sum(1 for r in all_results if r['num_plates'] > 0)
+                'detections': len(all_plates),
+                'tracked': tracked_count
             })
 
         frame_idx += 1
@@ -232,11 +249,27 @@ def process_video(
     if video_writer:
         video_writer.release()
 
+    # Get tracked plates with voting results
+    tracked_results = []
+    if tracker:
+        tracked_results = tracker.get_all_tracked_plates()
+
     # Create summary
     summary = create_plate_summary(all_plates)
     summary['video'] = str(video_path)
     summary['frames_processed'] = processed_count
     summary['frames_with_plates'] = sum(1 for r in all_results if r['num_plates'] > 0)
+
+    # Add tracking summary
+    if tracker and tracked_results:
+        summary['tracking_enabled'] = True
+        summary['unique_plates_tracked'] = len(tracked_results)
+        summary['tracked_plates'] = tracked_results
+
+        # Get final plate texts from tracking (voted results)
+        summary['final_plate_texts'] = [t['plate_text'] for t in tracked_results]
+    else:
+        summary['tracking_enabled'] = False
 
     # Save JSON results
     if save_json:
@@ -245,7 +278,8 @@ def process_video(
         with open(results_path, 'w') as f:
             json.dump({
                 'summary': summary,
-                'frames': all_results
+                'frames': all_results,
+                'tracked_plates': tracked_results
             }, f, indent=2)
 
         # Summary only
@@ -259,14 +293,21 @@ def process_video(
     print(f"{'='*60}")
     print(f"Frames processed: {processed_count}")
     print(f"Frames with plates: {summary['frames_with_plates']}")
-    print(f"Total plates detected: {summary['total_plates']}")
-    print(f"Readable plates: {summary['readable_plates']}")
-    print(f"Average confidence: {summary['avg_confidence']:.2f}")
+    print(f"Total detections: {summary['total_plates']}")
 
-    if summary['plate_texts']:
-        print(f"\nDetected plate numbers:")
-        for text in set(summary['plate_texts']):
-            print(f"  - {text}")
+    if tracker and tracked_results:
+        print(f"\n--- TRACKING RESULTS (with voting) ---")
+        print(f"Unique plates tracked: {len(tracked_results)}")
+        print(f"\nFinal Plate Numbers:")
+        for t in tracked_results:
+            print(f"  - {t['plate_text']} (confidence: {t['confidence']:.2f}, votes: {t['vote_count']}/{t['total_readings']})")
+            if t.get('all_readings'):
+                print(f"    All readings: {t['all_readings']}")
+    else:
+        if summary['plate_texts']:
+            print(f"\nDetected plate numbers:")
+            for text in set(summary['plate_texts']):
+                print(f"  - {text}")
 
     if save_video:
         print(f"\nOutput video: {output_video_path}")
@@ -277,7 +318,8 @@ def process_video(
 
     return {
         'summary': summary,
-        'results': all_results
+        'results': all_results,
+        'tracked_plates': tracked_results
     }
 
 
