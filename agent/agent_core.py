@@ -735,17 +735,25 @@ If you find {category}, output the JSON. If nothing found, output: []"""
             logger.info(f"Using exemplar-enhanced detection for '{category}'")
 
             # Build multi-image prompt with exemplars
+            # Use 'contrastive' strategy if you want positive+negative exemplars
+            strategy = self.exemplar_strategy
+            if strategy == "visual_context":
+                # visual_context only uses positive exemplars
+                pass
+            elif strategy == "contrastive":
+                # contrastive uses both positive and negative exemplars
+                pass
+
             prompt_data = self.exemplar_prompt_builder.build_detection_prompt(
                 category=category,
                 target_image=image,
-                strategy=self.exemplar_strategy,
-                max_exemplars=self.max_exemplars,
-                include_negative=True
+                strategy=strategy,
+                max_exemplars=self.max_exemplars
             )
 
-            if not prompt_data.get("success"):
-                # Fallback to text-only detection
-                logger.warning(f"Failed to build exemplar prompt for '{category}', using text-only")
+            if not prompt_data.get("has_exemplars"):
+                # No exemplars available, fallback to text-only detection
+                logger.warning(f"No exemplars available for '{category}', using text-only")
                 return self._detect_with_text_only(image, category, description, img_width, img_height)
 
             # Enhance the prompt with image size info and JSON output format
