@@ -532,7 +532,9 @@ class InfrastructureDetectionAgentCore:
         CATEGORIES = {
             "road_defects": [
                 ("potholes", "holes, depressions, or cavities in road pavement - dark circular or irregular shapes in the road"),
-                ("cracks", "any cracks in road pavement - longitudinal cracks, transverse cracks, alligator/web cracks, or any visible breaks in the road surface"),
+                ("alligator_cracks", "interconnected cracks forming a pattern resembling alligator skin or spider web - multiple small polygonal pieces of cracked pavement"),
+                ("longitudinal_cracks", "cracks running parallel to the road direction/centerline - long straight or slightly curved cracks along the road"),
+                ("transverse_cracks", "cracks running perpendicular/across the road direction - cracks that go from one side of the lane to the other"),
             ],
             "social_issues": [
                 ("homeless_encampment", "tents, tarps, blue tarps, makeshift shelters, camping tents, fabric shelters, cardboard shelters on sidewalk or street - ANY tent or tarp structure"),
