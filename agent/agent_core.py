@@ -772,7 +772,9 @@ If you find {category} matching the exemplars, output the JSON. If nothing found
             if hasattr(self.qwen_detector, 'detect_with_messages'):
                 # Use the multi-image message format
                 messages = prompt_data.get("messages", [])
-                if messages:
+                all_images = prompt_data.get("all_images", [image])  # Get all images including exemplars
+
+                if messages and all_images:
                     # Update the last message with enhanced prompt
                     for msg in reversed(messages):
                         if msg.get("role") == "user":
@@ -783,7 +785,7 @@ If you find {category} matching the exemplars, output the JSON. If nothing found
                                     break
                             break
 
-                    result = self.qwen_detector.detect_with_messages(messages)
+                    result = self.qwen_detector.detect_with_messages(messages, all_images)
                 else:
                     # Fallback to standard detection
                     result = self.qwen_detector.detect(image, enhanced_prompt)
