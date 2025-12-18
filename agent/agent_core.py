@@ -903,6 +903,7 @@ If you find {category}, output the JSON. If nothing found, output: []"""
                 from ultralytics.models.sam import SAM3SemanticPredictor
                 import tempfile
                 import os
+                import gc
 
                 print(f"      [SAM3-EXEMPLAR] Using Ultralytics SAM3SemanticPredictor with bbox exemplar")
 
@@ -926,6 +927,24 @@ If you find {category}, output the JSON. If nothing found, output: []"""
                     return []
 
                 print(f"      [SAM3-EXEMPLAR] Using model: {sam3_model_path}")
+
+                # FREE GPU MEMORY before loading Ultralytics SAM3
+                print(f"      [SAM3-EXEMPLAR] Clearing GPU memory...")
+                import torch
+
+                # Move Qwen to CPU temporarily
+                if hasattr(self, 'qwen_detector') and self.qwen_detector is not None:
+                    if hasattr(self.qwen_detector, 'model') and self.qwen_detector.model is not None:
+                        self.qwen_detector.model.to('cpu')
+
+                # Clear native SAM3 from GPU
+                if hasattr(self, 'sam3_processor') and self.sam3_processor is not None:
+                    if hasattr(self.sam3_processor, 'model'):
+                        self.sam3_processor.model.to('cpu')
+
+                gc.collect()
+                torch.cuda.empty_cache()
+                print(f"      [SAM3-EXEMPLAR] GPU memory cleared")
 
                 overrides = dict(
                     conf=0.3,  # Higher threshold to reduce false positives
@@ -1031,18 +1050,43 @@ If you find {category}, output the JSON. If nothing found, output: []"""
 
                 finally:
                     os.unlink(temp_path)
+                    # Clean up Ultralytics predictor and restore models to GPU
+                    del predictor
+                    gc.collect()
+                    torch.cuda.empty_cache()
+
+                    # Restore Qwen to GPU
+                    print(f"      [SAM3-EXEMPLAR] Restoring models to GPU...")
+                    if hasattr(self, 'qwen_detector') and self.qwen_detector is not None:
+                        if hasattr(self.qwen_detector, 'model') and self.qwen_detector.model is not None:
+                            self.qwen_detector.model.to('cuda')
+
+                    # Restore native SAM3 to GPU
+                    if hasattr(self, 'sam3_processor') and self.sam3_processor is not None:
+                        if hasattr(self.sam3_processor, 'model'):
+                            self.sam3_processor.model.to('cuda')
 
             except Exception as e:
                 print(f"      [SAM3-EXEMPLAR] Error: {e}")
                 import traceback
                 traceback.print_exc()
+                # Restore models on error too
+                try:
+                    if hasattr(self, 'qwen_detector') and self.qwen_detector is not None:
+                        if hasattr(self.qwen_detector, 'model') and self.qwen_detector.model is not None:
+                            self.qwen_detector.model.to('cuda')
+                    if hasattr(self, 'sam3_processor') and self.sam3_processor is not None:
+                        if hasattr(self.sam3_processor, 'model'):
+                            self.sam3_processor.model.to('cuda')
+                except:
+                    pass
                 return []
 
         except Exception as e:
             print(f"      [SAM3-EXEMPLAR] ERROR for {category}: {e}")
             import traceback
             traceback.print_exc()
-            return self._detect_with_text_only(image, category, description, img_width, img_height)
+            return []
 
     def _create_merged_image_with_bbox(self, exemplar: Image.Image, target: Image.Image) -> tuple:
         """
