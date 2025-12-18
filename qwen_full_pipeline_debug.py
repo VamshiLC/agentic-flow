@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 """
 Qwen2.5-VL-7B Full Pipeline: Face Blur + Damaged Crosswalk Detection
-
-Uses one Qwen model for:
-1. Face detection and blurring (privacy)
-2. Damaged crosswalk detection
+ENHANCED DEBUG VERSION - Shows face bounding boxes and detailed logging
 """
 import sys
 import re
@@ -51,29 +48,51 @@ def parse_face_detections(response, image_size, confidence_threshold=0.5):
     bboxes = []
     width, height = image_size
 
+    print(f"\n  [DEBUG] Parsing face detections from response...")
+    print(f"  [DEBUG] Image size: {width}x{height}")
+    print(f"  [DEBUG] Response text: {response[:500]}...")
+
     if "no faces detected" in response.lower():
+        print(f"  [DEBUG] Response indicates no faces detected")
         return bboxes
 
     pattern = r'Face:\s*\d+,\s*Box:\s*\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\],\s*Confidence:\s*([\d.]+)'
     matches = re.findall(pattern, response, re.IGNORECASE)
 
-    for match in matches:
+    print(f"  [DEBUG] Regex found {len(matches)} matches")
+
+    for i, match in enumerate(matches):
         try:
             x1, y1, x2, y2, conf = map(float, match)
+            print(f"  [DEBUG] Match {i+1}: x1={x1}, y1={y1}, x2={x2}, y2={y2}, conf={conf}")
+
             if conf < confidence_threshold:
+                print(f"  [DEBUG]   -> Skipped (confidence {conf} < {confidence_threshold})")
                 continue
 
             x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+
+            # Clamp to image bounds
+            x1_orig, y1_orig, x2_orig, y2_orig = x1, y1, x2, y2
             x1 = max(0, min(x1, width))
             y1 = max(0, min(y1, height))
             x2 = max(0, min(x2, width))
             y2 = max(0, min(y2, height))
 
+            if (x1_orig, y1_orig, x2_orig, y2_orig) != (x1, y1, x2, y2):
+                print(f"  [DEBUG]   -> Clamped from [{x1_orig},{y1_orig},{x2_orig},{y2_orig}] to [{x1},{y1},{x2},{y2}]")
+
             if x2 > x1 and y2 > y1:
                 bboxes.append((x1, y1, x2, y2))
-        except (ValueError, IndexError):
+                print(f"  [DEBUG]   -> Added bbox: [{x1},{y1},{x2},{y2}] (size: {x2-x1}x{y2-y1})")
+            else:
+                print(f"  [DEBUG]   -> Invalid bbox (x2={x2} <= x1={x1} or y2={y2} <= y1={y1})")
+
+        except (ValueError, IndexError) as e:
+            print(f"  [DEBUG] Match {i+1} parsing failed: {e}")
             continue
 
+    print(f"  [DEBUG] Final: {len(bboxes)} valid face bboxes\n")
     return bboxes
 
 
@@ -116,25 +135,44 @@ def parse_infrastructure_detections(response, image_size, confidence_threshold=0
 
 def blur_faces(image, bboxes, strength=51, padding=20):
     """Apply Gaussian blur to face regions."""
+    if len(bboxes) == 0:
+        print(f"  [DEBUG] No bboxes to blur, returning original image")
+        return image.copy()
+
     output = image.copy()
     h, w = image.shape[:2]
 
+    print(f"\n  [DEBUG] Blurring {len(bboxes)} face region(s)...")
+    print(f"  [DEBUG] Image shape: {h}x{w}, Blur strength: {strength}, Padding: {padding}")
+
     if strength % 2 == 0:
         strength += 1
+        print(f"  [DEBUG] Adjusted blur strength to odd number: {strength}")
 
-    for (x1, y1, x2, y2) in bboxes:
+    for i, (x1, y1, x2, y2) in enumerate(bboxes):
+        print(f"  [DEBUG] Face {i+1}: [{x1},{y1},{x2},{y2}]")
+
+        # Add padding
         x1_pad = max(0, x1 - padding)
         y1_pad = max(0, y1 - padding)
         x2_pad = min(w, x2 + padding)
         y2_pad = min(h, y2 + padding)
 
+        print(f"  [DEBUG]   -> With padding: [{x1_pad},{y1_pad},{x2_pad},{y2_pad}]")
+
         face_region = output[y1_pad:y2_pad, x1_pad:x2_pad]
+        print(f"  [DEBUG]   -> Region shape: {face_region.shape}")
+
         if face_region.size == 0:
+            print(f"  [DEBUG]   -> Region is empty, skipping")
             continue
 
+        # Apply Gaussian blur
         blurred = cv2.GaussianBlur(face_region, (strength, strength), 0)
         output[y1_pad:y2_pad, x1_pad:x2_pad] = blurred
+        print(f"  [DEBUG]   -> Blur applied successfully")
 
+    print(f"  [DEBUG] Blur complete!\n")
     return output
 
 
@@ -191,20 +229,22 @@ def draw_detections(image, detections):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python qwen_full_pipeline.py <input_image> [output_dir]")
+        print("Usage: python qwen_full_pipeline_debug.py <input_image> [output_dir]")
         print()
         print("Examples:")
-        print("  python qwen_full_pipeline.py road.jpg")
-        print("  python qwen_full_pipeline.py road.jpg results/")
+        print("  python qwen_full_pipeline_debug.py road.jpg")
+        print("  python qwen_full_pipeline_debug.py road.jpg results/")
         print()
-        print("This script:")
+        print("This DEBUG version:")
         print("  1. Detects and blurs faces (privacy)")
-        print("  2. Detects damaged crosswalks")
-        print("  3. Saves annotated results")
+        print("  2. Draws GREEN boxes around detected faces (NEW!)")
+        print("  3. Detects damaged crosswalks")
+        print("  4. Shows detailed debug logging")
+        print("  5. Saves annotated results")
         sys.exit(1)
 
     input_path = sys.argv[1]
-    output_dir = sys.argv[2] if len(sys.argv) > 2 else "qwen_results"
+    output_dir = sys.argv[2] if len(sys.argv) > 2 else "qwen_results_debug"
 
     if not Path(input_path).exists():
         print(f"ERROR: File not found: {input_path}")
@@ -215,7 +255,7 @@ def main():
     output_path.mkdir(exist_ok=True)
 
     print("=" * 70)
-    print("Qwen2.5-VL-7B Full Pipeline")
+    print("Qwen2.5-VL-7B Full Pipeline - DEBUG VERSION")
     print("Face Blur + Damaged Crosswalk Detection")
     print("=" * 70)
     print(f"Input: {input_path}")
@@ -248,6 +288,8 @@ def main():
         print("✓ Qwen loaded (will be used for both face detection and infrastructure)\n")
     except Exception as e:
         print(f"✗ ERROR: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
     # Step 1: Detect and blur faces
@@ -263,34 +305,42 @@ def main():
             face_bboxes = []
         else:
             face_response = face_result.get('text', '')
-            print(f"Qwen response: {face_response[:200]}...")
+            print(f"Qwen raw response:\n{'-'*70}")
+            print(face_response)
+            print(f"{'-'*70}")
+
             face_bboxes = parse_face_detections(face_response, (w, h))
 
         print(f"\n✓ Detected {len(face_bboxes)} face(s)")
 
         if face_bboxes:
+            print("\nFace bounding boxes:")
             for i, (x1, y1, x2, y2) in enumerate(face_bboxes):
                 print(f"  Face {i+1}: [{x1}, {y1}, {x2}, {y2}] ({x2-x1}x{y2-y1}px)")
 
-            # Draw boxes around faces
-            print("\nDrawing boxes around detected faces...")
+            # Draw boxes around faces (NEW!)
+            print("\n  Drawing green boxes around faces...")
             face_boxes_image = draw_face_boxes(image_cv, face_bboxes)
             cv2.imwrite(str(output_path / "1a_faces_detected.jpg"), face_boxes_image)
-            print("✓ Face boxes saved to 1a_faces_detected.jpg")
+            print("  ✓ Saved: 1a_faces_detected.jpg")
 
             # Apply blur
-            print("\nApplying Gaussian blur...")
+            print("\n  Applying Gaussian blur...")
             blurred_image = blur_faces(image_cv, face_bboxes, strength=51)
             cv2.imwrite(str(output_path / "1b_privacy_protected.jpg"), blurred_image)
-            print("✓ Privacy blur applied to 1b_privacy_protected.jpg")
+            print("  ✓ Saved: 1b_privacy_protected.jpg")
+            print("  ✓ Privacy blur applied")
         else:
-            print("No faces detected, using original image")
+            print("\n  No faces detected, using original image")
             blurred_image = image_cv.copy()
-            cv2.imwrite(str(output_path / "1_privacy_protected.jpg"), blurred_image)
+            cv2.imwrite(str(output_path / "1b_privacy_protected.jpg"), blurred_image)
 
     except Exception as e:
         print(f"✗ ERROR during face detection: {e}")
+        import traceback
+        traceback.print_exc()
         blurred_image = image_cv.copy()
+        face_bboxes = []
 
     # Step 2: Detect damaged crosswalks (on blurred image)
     print("\n" + "=" * 70)
@@ -365,7 +415,7 @@ def main():
     print()
     print("Output files:")
     print(f"  0_original.jpg           - Original image")
-    print(f"  1a_faces_detected.jpg    - GREEN boxes around detected faces")
+    print(f"  1a_faces_detected.jpg    - GREEN boxes around detected faces (NEW!)")
     print(f"  1b_privacy_protected.jpg - Faces blurred")
     print(f"  2_annotated.jpg          - Crosswalks annotated")
     print(f"  results.json             - Complete results")
