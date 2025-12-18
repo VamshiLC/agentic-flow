@@ -2,9 +2,7 @@
   "blur_categories": [
     "face"
   ],
-  "detect_categories": [
-    "damaged crosswalk"
-  ],
+  "detect_categories": [],
   "settings": {
     "blur_strength": 51,
     "score_threshold": 0.5,

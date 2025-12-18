@@ -215,16 +215,10 @@ Examples:
     }
 
     print("=" * 70)
-    print("SAM3 Multi-Category Detection + Privacy Blur")
+    print("SAM3 Processing")
     print("=" * 70)
     print(f"Input:  {args.input}")
     print(f"Output: {args.output}/")
-    print(f"\nBLUR categories:   {', '.join(blur_categories) if blur_categories else 'None'}")
-    print(f"DETECT categories: {', '.join(detect_categories) if detect_categories else 'None'}")
-    print(f"\nSettings:")
-    print(f"  Blur strength:    {settings.get('blur_strength', 51)}")
-    print(f"  Score threshold:  {settings.get('score_threshold', 0.5)}")
-    print(f"  Padding:          {settings.get('add_padding', 20)}px")
     print()
 
     # Read image
@@ -264,25 +258,22 @@ Examples:
     print("   ✓ Ready")
 
     # Detect all categories
-    print("\n3. Detecting categories...")
+    print("\n3. Processing...")
     all_detections = {}
     all_categories = blur_categories + detect_categories
 
     for category in all_categories:
-        print(f"   • {category:20}", end=" ")
         boxes = detect_category(
             processor, inference_state, category,
             settings.get('score_threshold', 0.5)
         )
         all_detections[category] = boxes
-        print(f"→ {len(boxes)} found")
 
     # Skip saving intermediate files - only save final result
-    print("\n4. Processing detections...")
 
     # Apply blur
     if blur_categories:
-        print("\n5. Applying privacy blur...")
+        print("\n4. Applying blur...")
         blurred_image = image_cv.copy()
         total_blurred = 0
 
@@ -295,14 +286,12 @@ Examples:
                     settings.get('add_padding', 20)
                 )
                 total_blurred += len(boxes)
-                print(f"   ✓ Blurred {len(boxes)} {category}(s)")
     else:
         blurred_image = image_cv.copy()
         total_blurred = 0
-        print("\n5. No blur categories specified, skipping...")
 
     # Final image with blur + detections
-    print("\n6. Creating final image...")
+    print("\n5. Saving...")
     final_viz = blurred_image.copy()
 
     for category in detect_categories:
@@ -337,20 +326,6 @@ Examples:
         json.dump(summary, f, indent=2)
 
     # Print summary
-    print("\n" + "=" * 70)
-    print("SUMMARY")
-    print("=" * 70)
-
-    for category in blur_categories:
-        boxes = all_detections.get(category, [])
-        if len(boxes) > 0:
-            print(f"🔒 {category:20} → {len(boxes):2} BLURRED")
-
-    for category in detect_categories:
-        boxes = all_detections.get(category, [])
-        if len(boxes) > 0:
-            print(f"🎯 {category:20} → {len(boxes):2} DETECTED")
-
     print("\n" + "=" * 70)
     print(f"📁 Results: {output_path}/")
     print("=" * 70)
