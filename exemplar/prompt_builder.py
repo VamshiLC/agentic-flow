@@ -144,47 +144,39 @@ class ExemplarPromptBuilder:
         # Add target image
         content.append({"type": "image", "image": target_image})
 
-        # Build detection prompt
+        # Build detection prompt - PIXEL COORDINATES, matching agent_core format
         if exemplar_images:
             prompt_text = f"""[Target Image] Now analyze this road image.
 
 Find ALL instances of {display_name} that look similar to the examples shown above.
 
-For each detection, provide:
-1. Bounding box coordinates [x1, y1, x2, y2] as percentages (0-100)
-2. Confidence score (0.0-1.0)
-3. Brief description
+CRITICAL RULES FOR BOUNDING BOXES:
+- Draw TIGHT bounding boxes around ONLY the defect
+- Box should fit closely around the actual crack/pothole
+- Do NOT draw huge boxes covering the whole road
+- Each defect gets its own small, tight box
 
-IMPORTANT:
-- Look for visual similarities to the exemplar images
-- Shadows and dark patches are NOT {display_name}
-- Only report REAL defects with clear visual evidence
+Output JSON array:
+[{{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}]
 
-Respond in JSON format:
-{{
-    "detections": [
-        {{"bbox": [x1, y1, x2, y2], "confidence": 0.9, "description": "..."}}
-    ]
-}}
+x1,y1 = top-left corner (pixels). x2,y2 = bottom-right corner (pixels).
 
-If no {display_name} found, respond: {{"detections": []}}"""
+If no {display_name} found, output: []"""
         else:
             # Fallback to text-only prompt
             prompt_text = f"""Analyze this road image and find ALL instances of {display_name}.
 
-For each detection, provide:
-1. Bounding box coordinates [x1, y1, x2, y2] as percentages (0-100)
-2. Confidence score (0.0-1.0)
-3. Brief description
+CRITICAL RULES FOR BOUNDING BOXES:
+- Draw TIGHT bounding boxes around ONLY the defect
+- Box should fit closely around the actual crack/pothole
+- Do NOT draw huge boxes covering the whole road
 
-Respond in JSON format:
-{{
-    "detections": [
-        {{"bbox": [x1, y1, x2, y2], "confidence": 0.9, "description": "..."}}
-    ]
-}}
+Output JSON array:
+[{{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}]
 
-If no {display_name} found, respond: {{"detections": []}}"""
+x1,y1 = top-left corner (pixels). x2,y2 = bottom-right corner (pixels).
+
+If no {display_name} found, output: []"""
 
         content.append({"type": "text", "text": prompt_text})
 

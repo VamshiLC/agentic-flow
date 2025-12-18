@@ -724,38 +724,6 @@ If you find {category}, output the JSON. If nothing found, output: []"""
             for d in detections:
                 d['label'] = category  # Force correct label
 
-            # STRICT POST-FILTER for road defects
-            road_defect_categories = ['potholes', 'pothole', 'cracks', 'crack',
-                'alligator_cracks', 'longitudinal_cracks', 'transverse_cracks']
-
-            if category.lower() in road_defect_categories:
-                filtered = []
-                img_area = img_width * img_height
-                for d in detections:
-                    x1, y1, x2, y2 = d.get('bbox', [0,0,0,0])
-                    box_w = x2 - x1
-                    box_h = y2 - y1
-                    box_area = box_w * box_h
-
-                    # REJECT if top of box is in upper 40% of image
-                    if y1 < img_height * 0.40:
-                        print(f"    [TEXT REJECT] {category}: y1={y1} in sky (< {img_height*0.40:.0f})")
-                        continue
-                    # REJECT if box is too large (>15% of image)
-                    if box_area > img_area * 0.15:
-                        print(f"    [TEXT REJECT] {category}: too large ({box_area/img_area*100:.1f}%)")
-                        continue
-                    # REJECT if box spans >50% width
-                    if box_w > img_width * 0.50:
-                        print(f"    [TEXT REJECT] {category}: too wide ({box_w} > {img_width*0.50:.0f})")
-                        continue
-                    # REJECT if box spans >40% height
-                    if box_h > img_height * 0.40:
-                        print(f"    [TEXT REJECT] {category}: too tall ({box_h} > {img_height*0.40:.0f})")
-                        continue
-                    filtered.append(d)
-                detections = filtered
-
             return detections
         except Exception as e:
             logger.error(f"Detection error for {category}: {e}")
@@ -864,38 +832,6 @@ If you find {category} matching the exemplars, output the JSON. If nothing found
                 d['label'] = category
                 d['used_exemplars'] = True
 
-            # STRICT POST-FILTER for road defects
-            road_defect_categories = ['potholes', 'pothole', 'cracks', 'crack',
-                'alligator_cracks', 'longitudinal_cracks', 'transverse_cracks']
-
-            if category.lower() in road_defect_categories:
-                filtered = []
-                img_area = img_width * img_height
-                for d in detections:
-                    x1, y1, x2, y2 = d.get('bbox', [0,0,0,0])
-                    box_w = x2 - x1
-                    box_h = y2 - y1
-                    box_area = box_w * box_h
-
-                    # REJECT if top of box is in upper 40% of image
-                    if y1 < img_height * 0.40:
-                        print(f"    [EXEMPLAR REJECT] {category}: y1={y1} in sky (< {img_height*0.40:.0f})")
-                        continue
-                    # REJECT if box is too large (>15% of image)
-                    if box_area > img_area * 0.15:
-                        print(f"    [EXEMPLAR REJECT] {category}: too large ({box_area/img_area*100:.1f}%)")
-                        continue
-                    # REJECT if box spans >50% width
-                    if box_w > img_width * 0.50:
-                        print(f"    [EXEMPLAR REJECT] {category}: too wide ({box_w} > {img_width*0.50:.0f})")
-                        continue
-                    # REJECT if box spans >40% height
-                    if box_h > img_height * 0.40:
-                        print(f"    [EXEMPLAR REJECT] {category}: too tall ({box_h} > {img_height*0.40:.0f})")
-                        continue
-                    filtered.append(d)
-                detections = filtered
-
             if detections:
                 logger.info(f"Exemplar detection found {len(detections)} {category}")
 
@@ -943,38 +879,7 @@ If you find {category} matching the exemplars, output the JSON. If nothing found
                             x1, y1 = max(0, x1), max(0, y1)
                             x2, y2 = min(img_width, x2), min(img_height, y2)
                             if x1 < x2 and y1 < y2:
-                                # Validate bounding box size
-                                box_width = x2 - x1
-                                box_height = y2 - y1
-                                box_area = box_width * box_height
-                                img_area = img_width * img_height
-
-                                # STRICT VALIDATION for road defects (potholes, cracks)
-                                road_defect_categories = ['potholes', 'pothole', 'cracks', 'crack',
-                                    'alligator_cracks', 'longitudinal_cracks', 'transverse_cracks']
-
-                                if label.lower() in road_defect_categories:
-                                    # Rule 1: Box TOP (y1) must be in lower 60% of image
-                                    # Road defects are ON THE ROAD - not in sky/trees
-                                    if y1 < img_height * 0.40:
-                                        print(f"    [PARSE REJECT] {label}: top of box in sky/trees (y1={y1} < {img_height*0.40:.0f})")
-                                        continue
-
-                                    # Rule 2: Box should not be larger than 15% of image
-                                    if box_area > img_area * 0.15:
-                                        print(f"    [PARSE REJECT] {label}: box too large ({box_area/img_area*100:.1f}% > 15%)")
-                                        continue
-
-                                    # Rule 3: Box width should not span more than 60% of image
-                                    if box_width > img_width * 0.60:
-                                        print(f"    [PARSE REJECT] {label}: box too wide ({box_width} > {img_width*0.60:.0f})")
-                                        continue
-
-                                    # Rule 4: Box height should not span more than 40% of image
-                                    if box_height > img_height * 0.40:
-                                        print(f"    [PARSE REJECT] {label}: box too tall ({box_height} > {img_height*0.40:.0f})")
-                                        continue
-
+                                # No filtering - trust the model
                                 detections.append({'label': label, 'bbox': [x1,y1,x2,y2], 'confidence': 0.8})
         except:
             pass
