@@ -328,6 +328,9 @@ def process_video(
 
     # Save JSON results
     if save_json:
+        # Ensure output directory exists
+        output_dir.mkdir(parents=True, exist_ok=True)
+
         # Full results
         results_path = output_dir / "detections.json"
         with open(results_path, 'w') as f:
