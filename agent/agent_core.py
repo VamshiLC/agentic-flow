@@ -118,6 +118,14 @@ class InfrastructureDetectionAgentCore:
         if exemplar_manager:
             stats = exemplar_manager.get_stats()
             logger.info(f"Agent initialized with {stats['total_exemplars']} exemplars, strategy={exemplar_strategy}")
+            # Print which categories have exemplars
+            categories_with_exemplars = []
+            for cat in exemplar_manager.VALID_CATEGORIES:
+                if exemplar_manager.has_exemplars(cat):
+                    count = len(exemplar_manager.get_positive_exemplars(cat))
+                    categories_with_exemplars.append(f"{cat}({count})")
+            if categories_with_exemplars:
+                print(f"  Exemplars loaded for: {', '.join(categories_with_exemplars)}")
         logger.info(f"Agent initialized with max_turns={self.config.max_turns}")
 
     def _optimize_memory_before_sam3(self):
