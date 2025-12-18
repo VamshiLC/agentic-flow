@@ -824,23 +824,23 @@ If you find {category}, output the JSON. If nothing found, output: []"""
             exemplar_box_bottom = 10 + exemplar_height + 30
 
             # Prompt that references the merged example
-            merged_prompt = f"""Look at this image. In the TOP-LEFT corner (marked with red border and "EXAMPLE" label),
-there is a reference showing what {display_name} looks like.
+            merged_prompt = f"""Look at this image. In the TOP-LEFT corner (red border, "EXAMPLE" label) is a reference showing {display_name}.
 
-Now find ALL similar {display_name} in the REST of this image (outside the example box).
+Find ALL INDIVIDUAL {display_name} in the road area of this image.
 
-IMPORTANT:
-- The example in top-left shows what to look for
-- Find similar patterns in the MAIN part of the image (the road)
-- Do NOT include the example box itself in your detections
-- Draw TIGHT bounding boxes around each {display_name} you find
+CRITICAL - BOUNDING BOX RULES:
+- Draw a SEPARATE small box around EACH individual {display_name}
+- Each box should be TIGHT - only around ONE crack/defect
+- Do NOT draw one big box covering the whole road
+- If there are 5 cracks, output 5 separate small boxes
+- Box width/height should typically be 50-300 pixels, NOT 1000+ pixels
 
-Output JSON array with bounding boxes:
-[{{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}]
+Output JSON array with MULTIPLE small bounding boxes:
+[{{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}, {{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}, ...]
 
 Image size: {img_width} x {img_height} pixels.
-Only output detections where x1 > {exemplar_box_right} OR y1 > {exemplar_box_bottom} (outside the example box).
-If no {display_name} found in the main image, output: []"""
+Exclude the example area (top-left corner up to x={exemplar_box_right}, y={exemplar_box_bottom}).
+If no {display_name} found, output: []"""
 
             print(f"      [EXEMPLAR] Running detection on merged image...")
             result = self.qwen_detector.detect(merged_image, merged_prompt)
