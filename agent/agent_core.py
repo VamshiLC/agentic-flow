@@ -890,25 +890,26 @@ If you find {category} matching the exemplars, output the JSON. If nothing found
                                     'alligator_cracks', 'longitudinal_cracks', 'transverse_cracks']
 
                                 if label.lower() in road_defect_categories:
-                                    # Rule 1: Box should not be larger than 25% of image
-                                    if box_area > img_area * 0.25:
-                                        logger.debug(f"Rejecting {label}: box too large ({box_area/img_area*100:.1f}% of image)")
+                                    # Rule 1: Box TOP (y1) must be in lower 60% of image
+                                    # Road defects are ON THE ROAD - not in sky/trees
+                                    if y1 < img_height * 0.40:
+                                        print(f"    [PARSE REJECT] {label}: top of box in sky/trees (y1={y1} < {img_height*0.40:.0f})")
                                         continue
 
-                                    # Rule 2: Box should be in LOWER half of image (road surface)
-                                    box_center_y = (y1 + y2) / 2
-                                    if box_center_y < img_height * 0.3:  # Top 30% is usually sky/buildings
-                                        logger.debug(f"Rejecting {label}: box in upper part of image (sky/buildings)")
+                                    # Rule 2: Box should not be larger than 15% of image
+                                    if box_area > img_area * 0.15:
+                                        print(f"    [PARSE REJECT] {label}: box too large ({box_area/img_area*100:.1f}% > 15%)")
                                         continue
 
-                                    # Rule 3: For cracks, width OR height should be reasonable (not both huge)
-                                    if 'crack' in label.lower():
-                                        # Cracks are thin - at least one dimension should be small
-                                        min_dim = min(box_width, box_height)
-                                        max_dim = max(box_width, box_height)
-                                        if min_dim > img_width * 0.3 and max_dim > img_height * 0.3:
-                                            logger.debug(f"Rejecting {label}: crack box too thick ({box_width}x{box_height})")
-                                            continue
+                                    # Rule 3: Box width should not span more than 60% of image
+                                    if box_width > img_width * 0.60:
+                                        print(f"    [PARSE REJECT] {label}: box too wide ({box_width} > {img_width*0.60:.0f})")
+                                        continue
+
+                                    # Rule 4: Box height should not span more than 40% of image
+                                    if box_height > img_height * 0.40:
+                                        print(f"    [PARSE REJECT] {label}: box too tall ({box_height} > {img_height*0.40:.0f})")
+                                        continue
 
                                 detections.append({'label': label, 'bbox': [x1,y1,x2,y2], 'confidence': 0.8})
         except:
