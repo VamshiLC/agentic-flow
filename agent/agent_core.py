@@ -912,8 +912,28 @@ Output JSON array:
 Image size: {img_width} x {img_height} pixels.
 Exclude the example area (top-left corner up to x={exemplar_box_right}, y={exemplar_box_bottom}).
 If no {display_name} found, output: []"""
+            elif category == "graffiti":
+                # Special prompt for graffiti detection
+                merged_prompt = f"""Look at this image. In the TOP-LEFT corner (red border, "EXAMPLE" label) is a reference showing graffiti (spray paint/tags on a sign).
+
+TASK: Find ANY graffiti, spray paint, tags, or vandalism ANYWHERE in this image.
+
+WHAT IS GRAFFITI:
+- Spray paint marks or tags
+- Written text/letters that look sprayed or painted
+- Colored marks that don't belong on signs, walls, or surfaces
+- Vandalism on street signs, buildings, fences, poles
+
+Look carefully at ALL signs and surfaces for any spray paint or graffiti marks.
+
+Output JSON array with bounding boxes:
+[{{"label": "graffiti", "bbox_2d": [x1, y1, x2, y2]}}, ...]
+
+Image size: {img_width} x {img_height} pixels.
+Exclude the example area (top-left corner, up to x={exemplar_box_right}, y={exemplar_box_bottom}).
+If no graffiti found, output: []"""
             else:
-                # General prompt for non-road-defect categories (graffiti, signs, etc.)
+                # General prompt for other non-road-defect categories
                 merged_prompt = f"""Look at this image. In the TOP-LEFT corner (red border, "EXAMPLE" label) is a reference showing {display_name}.
 
 Find ALL instances of {display_name} ANYWHERE in this image (on signs, walls, poles, buildings, etc.).
@@ -930,6 +950,17 @@ Exclude the example area (top-left corner up to x={exemplar_box_right}, y={exemp
 If no {display_name} found, output: []"""
 
             print(f"      [EXEMPLAR] Running detection on merged image...")
+
+            # DEBUG: Save merged image to see what model receives
+            debug_path = f"output/debug_merged_{category}.jpg"
+            try:
+                import os
+                os.makedirs("output", exist_ok=True)
+                merged_image.save(debug_path)
+                print(f"      [DEBUG] Saved merged image to {debug_path}")
+            except:
+                pass
+
             result = self.qwen_detector.detect(merged_image, merged_prompt)
 
             if not result.get("success"):
