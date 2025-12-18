@@ -53,8 +53,11 @@ def draw_plate_detections(
 
         # Draw text label
         if show_text:
-            # Primary label: plate text
+            # Primary label: plate text with track ID
+            track_id = plate.get('track_id', None)
             label = f"{plate_text}"
+            if track_id is not None:
+                label = f"{track_id}.{plate_text}"
             if state != 'Unknown':
                 label += f" ({state})"
 

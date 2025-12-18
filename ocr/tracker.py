@@ -118,6 +118,12 @@ class PlateTracker:
                 # Update existing track
                 self._update_track(matched_track_id, det, frame_idx)
                 det['track_id'] = matched_track_id
+
+                # Update detection with best voted text from track
+                best_text, best_conf = self.get_best_plate_text(matched_track_id)
+                if best_text != 'UNREADABLE':
+                    det['plate_text'] = best_text
+                    det['ocr_confidence'] = best_conf
             else:
                 # Create new track
                 track_id = self._create_track(det, frame_idx)

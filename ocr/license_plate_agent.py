@@ -303,6 +303,18 @@ class LicensePlateOCR:
 
                 # Validate bbox
                 if x2 > x1 and y2 > y1 and confidence >= 0.5:
+                    # Check aspect ratio - plates are wider than tall (ratio > 1.5)
+                    # Wheels are square (ratio ~1.0), so reject those
+                    box_width = x2 - x1
+                    box_height = y2 - y1
+                    aspect_ratio = box_width / box_height if box_height > 0 else 0
+
+                    # License plates typically have aspect ratio 1.5 to 3.0
+                    # Reject if too square (likely a wheel) or too narrow
+                    if aspect_ratio < 1.3:
+                        logger.info(f"Rejecting detection with aspect ratio {aspect_ratio:.2f} (likely wheel)")
+                        continue
+
                     plates.append({
                         'bbox': [x1, y1, x2, y2],
                         'confidence': confidence,
