@@ -721,9 +721,41 @@ If you find {category}, output the JSON. If nothing found, output: []"""
                 return []
             response_text = result.get("text", "")
             detections = self._parse_json_detection_response(response_text, img_width, img_height)
-            # Accept any detection (don't filter too strictly)
             for d in detections:
                 d['label'] = category  # Force correct label
+
+            # STRICT POST-FILTER for road defects
+            road_defect_categories = ['potholes', 'pothole', 'cracks', 'crack',
+                'alligator_cracks', 'longitudinal_cracks', 'transverse_cracks']
+
+            if category.lower() in road_defect_categories:
+                filtered = []
+                img_area = img_width * img_height
+                for d in detections:
+                    x1, y1, x2, y2 = d.get('bbox', [0,0,0,0])
+                    box_w = x2 - x1
+                    box_h = y2 - y1
+                    box_area = box_w * box_h
+
+                    # REJECT if top of box is in upper 40% of image
+                    if y1 < img_height * 0.40:
+                        print(f"    [TEXT REJECT] {category}: y1={y1} in sky (< {img_height*0.40:.0f})")
+                        continue
+                    # REJECT if box is too large (>15% of image)
+                    if box_area > img_area * 0.15:
+                        print(f"    [TEXT REJECT] {category}: too large ({box_area/img_area*100:.1f}%)")
+                        continue
+                    # REJECT if box spans >50% width
+                    if box_w > img_width * 0.50:
+                        print(f"    [TEXT REJECT] {category}: too wide ({box_w} > {img_width*0.50:.0f})")
+                        continue
+                    # REJECT if box spans >40% height
+                    if box_h > img_height * 0.40:
+                        print(f"    [TEXT REJECT] {category}: too tall ({box_h} > {img_height*0.40:.0f})")
+                        continue
+                    filtered.append(d)
+                detections = filtered
+
             return detections
         except Exception as e:
             logger.error(f"Detection error for {category}: {e}")
@@ -831,6 +863,38 @@ If you find {category} matching the exemplars, output the JSON. If nothing found
             for d in detections:
                 d['label'] = category
                 d['used_exemplars'] = True
+
+            # STRICT POST-FILTER for road defects
+            road_defect_categories = ['potholes', 'pothole', 'cracks', 'crack',
+                'alligator_cracks', 'longitudinal_cracks', 'transverse_cracks']
+
+            if category.lower() in road_defect_categories:
+                filtered = []
+                img_area = img_width * img_height
+                for d in detections:
+                    x1, y1, x2, y2 = d.get('bbox', [0,0,0,0])
+                    box_w = x2 - x1
+                    box_h = y2 - y1
+                    box_area = box_w * box_h
+
+                    # REJECT if top of box is in upper 40% of image
+                    if y1 < img_height * 0.40:
+                        print(f"    [EXEMPLAR REJECT] {category}: y1={y1} in sky (< {img_height*0.40:.0f})")
+                        continue
+                    # REJECT if box is too large (>15% of image)
+                    if box_area > img_area * 0.15:
+                        print(f"    [EXEMPLAR REJECT] {category}: too large ({box_area/img_area*100:.1f}%)")
+                        continue
+                    # REJECT if box spans >50% width
+                    if box_w > img_width * 0.50:
+                        print(f"    [EXEMPLAR REJECT] {category}: too wide ({box_w} > {img_width*0.50:.0f})")
+                        continue
+                    # REJECT if box spans >40% height
+                    if box_h > img_height * 0.40:
+                        print(f"    [EXEMPLAR REJECT] {category}: too tall ({box_h} > {img_height*0.40:.0f})")
+                        continue
+                    filtered.append(d)
+                detections = filtered
 
             if detections:
                 logger.info(f"Exemplar detection found {len(detections)} {category}")
