@@ -119,15 +119,17 @@ class ExemplarPromptBuilder:
         [Exemplar 2] This is another example of a pothole.
         [Target Image] Find all objects similar to the examples above.
         """
-        qwen_data = self.exemplar_manager.prepare_for_qwen(
-            category=category,
-            target_image=None,  # We'll add it separately
-            max_exemplars=max_exemplars,
-            include_negative=False
-        )
+        # Get FULL exemplar images (not cropped) for better pattern matching
+        # Cropped regions confuse the model because they look different from full images
+        positive_exemplars = self.exemplar_manager.get_positive_exemplars(category, max_count=max_exemplars)
 
-        exemplar_images = qwen_data["images"]
-        descriptions = qwen_data["positive_descriptions"]
+        exemplar_images = []
+        descriptions = []
+        for ex in positive_exemplars:
+            if ex.image:  # Use FULL image, not cropped region
+                exemplar_images.append(ex.image)
+                descriptions.append(ex.description or f"Road image containing {category}")
+
         display_name = self.CATEGORY_DISPLAY_NAMES.get(category, category)
 
         # Build message content

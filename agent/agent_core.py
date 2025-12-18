@@ -799,22 +799,36 @@ If you find {category} matching the exemplars, output the JSON. If nothing found
             if hasattr(self.qwen_detector, 'detect_with_exemplars') and exemplar_images:
                 # Build simpler descriptions for exemplars
                 display_name = self.exemplar_prompt_builder.CATEGORY_DISPLAY_NAMES.get(category, category)
-                exemplar_descriptions = [f"This is a {display_name}" for _ in exemplar_images]
 
-                # Simpler prompt - don't overwhelm model with complex instructions
-                simple_prompt = f"""Look at the example images of {display_name} shown above.
-Now find ALL similar {display_name} in this target image.
+                # Get FULL exemplar images (not cropped) - cropped regions confuse the model
+                # because they look different from patterns in full-size target image
+                full_exemplar_images = []
+                for ex in self.exemplar_manager.get_positive_exemplars(category, max_count=len(exemplar_images)):
+                    if ex.image:  # Use full image, not cropped region
+                        full_exemplar_images.append(ex.image)
 
-Output JSON array with tight bounding boxes:
+                if not full_exemplar_images:
+                    full_exemplar_images = exemplar_images  # Fallback to whatever we have
+
+                exemplar_descriptions = [f"This road image contains {display_name} - look for similar patterns" for _ in full_exemplar_images]
+
+                # Simpler prompt - tell model to look for similar PATTERNS
+                simple_prompt = f"""The example images above show roads with {display_name}.
+Study the visual patterns of {display_name} in those examples.
+
+Now examine this target road image and find ALL areas with similar {display_name} patterns.
+
+Output JSON array with bounding boxes around each {display_name}:
 [{{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}]
 
 Image size: {img_width} x {img_height} pixels.
-If none found, output: []"""
+Coordinates are in pixels. x1,y1 = top-left, x2,y2 = bottom-right.
+If no {display_name} found, output: []"""
 
-                print(f"      [EXEMPLAR] Calling detect_with_exemplars with {len(exemplar_images)} images")
+                print(f"      [EXEMPLAR] Calling detect_with_exemplars with {len(full_exemplar_images)} FULL images")
                 result = self.qwen_detector.detect_with_exemplars(
                     target_image=image,
-                    exemplar_images=exemplar_images,
+                    exemplar_images=full_exemplar_images,
                     prompt=simple_prompt,
                     exemplar_descriptions=exemplar_descriptions
                 )
