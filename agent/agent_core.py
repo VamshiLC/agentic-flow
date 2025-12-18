@@ -849,10 +849,16 @@ If you find {category}, output the JSON. If nothing found, output: []"""
 
     def _detect_with_exemplars(self, image: Image.Image, category: str, description: str, img_width: int, img_height: int) -> List[Dict]:
         """
-        Enhanced detection using few-shot exemplars.
+        Enhanced detection using SAM3 with merged exemplar image.
 
-        STRATEGY: Merge exemplar image INTO the target image, then ask model
-        to find similar patterns. This works better than multi-image prompts.
+        STRATEGY:
+        1. Merge exemplar image with target image (exemplar on LEFT, target on RIGHT)
+        2. Create bbox around the exemplar portion
+        3. Use SAM3SemanticPredictor with that bbox as exemplar prompt
+        4. SAM3 finds all matching instances in the target (right) portion
+        5. Translate detected bboxes back to original target coordinates
+
+        Reference: https://docs.ultralytics.com/models/sam-3/
 
         Args:
             image: Target image to analyze
@@ -865,146 +871,343 @@ If you find {category}, output the JSON. If nothing found, output: []"""
             List of detections with bboxes
         """
         try:
-            print(f"      [EXEMPLAR] Using MERGED exemplar detection for '{category}'")
+            print(f"      [SAM3-EXEMPLAR] Using SAM3 with merged exemplar for '{category}'")
 
             # Get exemplar images
             exemplars = self.exemplar_manager.get_positive_exemplars(category, max_count=1)
 
             if not exemplars or not exemplars[0].image:
-                print(f"      [EXEMPLAR] No exemplars found for '{category}', falling back to text-only")
+                print(f"      [SAM3-EXEMPLAR] No exemplars found for '{category}', falling back to text-only")
                 return self._detect_with_text_only(image, category, description, img_width, img_height)
 
             exemplar_img = exemplars[0].image
-            print(f"      [EXEMPLAR] Got 1 exemplar image, merging with target...")
+            print(f"      [SAM3-EXEMPLAR] Got exemplar image: {exemplar_img.size}")
 
-            # MERGE exemplar INTO target image
-            merged_image = self._merge_exemplar_with_target(exemplar_img, image)
+            # Create merged image: [EXEMPLAR | TARGET] side by side
+            merged_img, exemplar_bbox, target_x_offset = self._create_merged_image_with_bbox(
+                exemplar_img, image
+            )
+            print(f"      [SAM3-EXEMPLAR] Merged image: {merged_img.size}, exemplar bbox: {exemplar_bbox}")
 
-            # Get display name
-            display_name = category.replace("_", " ")
-
-            # Calculate where the exemplar box is in the merged image (to exclude from detection)
-            exemplar_height = img_height // 3
-            aspect_ratio = exemplar_img.width / exemplar_img.height
-            exemplar_width = int(exemplar_height * aspect_ratio)
-            exemplar_box_right = 10 + exemplar_width + 10
-            exemplar_box_bottom = 10 + exemplar_height + 30
-
-            # Prompt that references the merged example
-            # Use different prompts for road defects vs other categories
-            road_defect_categories = ['potholes', 'alligator_cracks', 'longitudinal_cracks', 'transverse_cracks', 'road_surface_damage']
-
-            if category in road_defect_categories:
-                merged_prompt = f"""Look at this image. In the TOP-LEFT corner (red border, "EXAMPLE" label) is a reference showing {display_name}.
-
-Find ALL INDIVIDUAL {display_name} in the ROAD SURFACE of this image.
-
-CRITICAL - BOUNDING BOX RULES:
-- Draw a SEPARATE small box around EACH individual {display_name}
-- Each box should be TIGHT - only around ONE crack/defect
-- Do NOT draw one big box covering the whole road
-- If there are 5 cracks, output 5 separate small boxes
-- Box width/height should typically be 50-300 pixels, NOT 1000+ pixels
-
-Output JSON array:
-[{{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}, ...]
-
-Image size: {img_width} x {img_height} pixels.
-Exclude the example area (top-left corner up to x={exemplar_box_right}, y={exemplar_box_bottom}).
-If no {display_name} found, output: []"""
-            elif category == "graffiti":
-                # Special prompt for graffiti detection
-                merged_prompt = f"""Look at this image. In the TOP-LEFT corner (red border, "EXAMPLE" label) is a reference showing graffiti (spray paint/tags on a sign).
-
-TASK: Find ANY graffiti, spray paint, tags, or vandalism ANYWHERE in this image.
-
-WHAT IS GRAFFITI:
-- Spray paint marks or tags
-- Written text/letters that look sprayed or painted
-- Colored marks that don't belong on signs, walls, or surfaces
-- Vandalism on street signs, buildings, fences, poles
-
-Look carefully at ALL signs and surfaces for any spray paint or graffiti marks.
-
-Output JSON array with bounding boxes:
-[{{"label": "graffiti", "bbox_2d": [x1, y1, x2, y2]}}, ...]
-
-Image size: {img_width} x {img_height} pixels.
-Exclude the example area (top-left corner, up to x={exemplar_box_right}, y={exemplar_box_bottom}).
-If no graffiti found, output: []"""
-            else:
-                # General prompt for other non-road-defect categories
-                merged_prompt = f"""Look at this image. In the TOP-LEFT corner (red border, "EXAMPLE" label) is a reference showing {display_name}.
-
-Find ALL instances of {display_name} ANYWHERE in this image (on signs, walls, poles, buildings, etc.).
-
-BOUNDING BOX RULES:
-- Draw a TIGHT box around EACH {display_name} you find
-- Include {display_name} on signs, walls, fences, buildings, or any surface
-
-Output JSON array:
-[{{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}, ...]
-
-Image size: {img_width} x {img_height} pixels.
-Exclude the example area (top-left corner up to x={exemplar_box_right}, y={exemplar_box_bottom}).
-If no {display_name} found, output: []"""
-
-            print(f"      [EXEMPLAR] Running detection on merged image...")
-
-            # DEBUG: Save merged image to see what model receives
-            debug_path = f"output/debug_merged_{category}.jpg"
-            try:
+            # Save debug image
+            if self.config.debug:
                 import os
-                os.makedirs("output", exist_ok=True)
-                merged_image.save(debug_path)
-                print(f"      [DEBUG] Saved merged image to {debug_path}")
-            except:
-                pass
+                os.makedirs(self.config.debug_dir, exist_ok=True)
+                debug_path = os.path.join(self.config.debug_dir, f"merged_{category}.jpg")
+                merged_img.save(debug_path)
+                print(f"      [SAM3-EXEMPLAR] Saved merged image to {debug_path}")
 
-            result = self.qwen_detector.detect(merged_image, merged_prompt)
+            # Try Ultralytics SAM3SemanticPredictor
+            try:
+                from ultralytics.models.sam import SAM3SemanticPredictor
+                print(f"      [SAM3-EXEMPLAR] Using Ultralytics SAM3SemanticPredictor")
 
-            if not result.get("success"):
-                print(f"      [EXEMPLAR] Detection FAILED: {result.get('error', 'unknown')}")
-                return self._detect_with_text_only(image, category, description, img_width, img_height)
+                overrides = dict(
+                    conf=self.config.confidence_threshold,
+                    task="segment",
+                    mode="predict",
+                    model="sam3.pt",
+                    verbose=False
+                )
+                predictor = SAM3SemanticPredictor(overrides=overrides)
 
-            response_text = result.get("text", "")
-            print(f"      [EXEMPLAR] Model response: {response_text[:300]}...")
-            detections = self._parse_json_detection_response(response_text, img_width, img_height)
+                # Save merged image temporarily
+                import tempfile
+                import os
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+                    merged_img.save(f.name)
+                    temp_path = f.name
 
-            # Filter out any detections that overlap with the exemplar box
-            filtered_detections = []
-            for det in detections:
-                x1, y1, x2, y2 = det['bbox']
-                # Keep if detection is mostly outside the exemplar area
-                if x1 > exemplar_box_right or y1 > exemplar_box_bottom:
-                    filtered_detections.append(det)
+                try:
+                    # Set merged image
+                    predictor.set_image(temp_path)
+
+                    # Text prompt for the category
+                    display_names = {
+                        "potholes": "pothole",
+                        "alligator_cracks": "cracked road surface",
+                        "longitudinal_cracks": "crack line",
+                        "transverse_cracks": "horizontal crack",
+                        "block_cracks": "block pattern cracks",
+                        "edge_cracks": "edge crack",
+                        "manholes": "manhole cover",
+                        "damaged_crosswalks": "damaged crosswalk",
+                        "graffiti": "graffiti",
+                        "road_surface_damage": "road damage"
+                    }
+                    text_prompt = display_names.get(category, category.replace("_", " "))
+
+                    # Run SAM3 with bbox around exemplar (left side) + text prompt
+                    print(f"      [SAM3-EXEMPLAR] Running with exemplar bbox {exemplar_bbox} + text='{text_prompt}'")
+
+                    results = predictor(
+                        bboxes=[exemplar_bbox],
+                        texts=[text_prompt],
+                        save=False
+                    )
+
+                    detections = []
+                    if results and len(results) > 0:
+                        result = results[0]
+
+                        if hasattr(result, 'masks') and result.masks is not None:
+                            masks = result.masks.data.cpu().numpy() if hasattr(result.masks.data, 'cpu') else result.masks.data
+                            boxes = result.boxes.xyxy.cpu().numpy() if hasattr(result, 'boxes') and result.boxes is not None else []
+                            scores = result.boxes.conf.cpu().numpy() if hasattr(result, 'boxes') and result.boxes is not None else []
+
+                            for i, mask in enumerate(masks):
+                                # Get bbox
+                                if i < len(boxes):
+                                    bbox = [int(b) for b in boxes[i].tolist()]
+                                else:
+                                    bbox = self._mask_to_bbox(mask)
+
+                                x1, y1, x2, y2 = bbox
+                                bbox_center_x = (x1 + x2) / 2
+
+                                # ONLY keep detections on the RIGHT side (target image)
+                                if bbox_center_x < target_x_offset:
+                                    print(f"      [SAM3-EXEMPLAR] Skipping bbox {bbox} - on exemplar side")
+                                    continue
+
+                                # Translate bbox to original target coordinates
+                                translated_bbox = [
+                                    x1 - target_x_offset,
+                                    y1,
+                                    x2 - target_x_offset,
+                                    y2
+                                ]
+
+                                # Scale back to original image size
+                                merged_target_w = merged_img.width - target_x_offset
+                                merged_target_h = merged_img.height
+                                scale_x = img_width / merged_target_w
+                                scale_y = img_height / merged_target_h
+
+                                final_bbox = [
+                                    max(0, int(translated_bbox[0] * scale_x)),
+                                    max(0, int(translated_bbox[1] * scale_y)),
+                                    min(img_width, int(translated_bbox[2] * scale_x)),
+                                    min(img_height, int(translated_bbox[3] * scale_y))
+                                ]
+
+                                score = float(scores[i]) if i < len(scores) else 0.8
+
+                                if score >= self.config.confidence_threshold and final_bbox[2] > final_bbox[0] and final_bbox[3] > final_bbox[1]:
+                                    detections.append({
+                                        'label': category,
+                                        'bbox': final_bbox,
+                                        'confidence': score,
+                                        'used_exemplars': True,
+                                        'method': 'sam3_merged_exemplar'
+                                    })
+                                    print(f"      [SAM3-EXEMPLAR] Found: {final_bbox} score={score:.2f}")
+
+                    print(f"      [SAM3-EXEMPLAR] SAM3 found {len(detections)} instances in target")
+
+                    if detections:
+                        detections = self._nms_detections(detections, iou_threshold=0.3)
+                        return detections
+
+                finally:
+                    os.unlink(temp_path)
+
+            except ImportError:
+                print(f"      [SAM3-EXEMPLAR] Ultralytics SAM3SemanticPredictor not available")
+            except Exception as e:
+                print(f"      [SAM3-EXEMPLAR] SAM3SemanticPredictor error: {e}")
+                import traceback
+                traceback.print_exc()
+
+            # Fallback to SAM3 text prompt
+            print(f"      [SAM3-EXEMPLAR] Falling back to SAM3 text prompt")
+            return self._detect_with_sam3_text(image, category, description, img_width, img_height)
+
+        except Exception as e:
+            print(f"      [SAM3-EXEMPLAR] ERROR for {category}: {e}")
+            import traceback
+            traceback.print_exc()
+            return self._detect_with_text_only(image, category, description, img_width, img_height)
+
+    def _create_merged_image_with_bbox(self, exemplar: Image.Image, target: Image.Image) -> tuple:
+        """
+        Create merged image with exemplar on LEFT, target on RIGHT.
+        Returns: (merged_image, exemplar_bbox, target_x_offset)
+
+        The exemplar_bbox covers the entire exemplar portion - this tells SAM3
+        "find everything that looks like what's in this box"
+        """
+        # Use same height for both
+        target_h = 800
+
+        # Resize exemplar
+        ex_aspect = exemplar.width / exemplar.height
+        ex_h = target_h
+        ex_w = int(ex_h * ex_aspect)
+        # Cap exemplar width to not be too large
+        if ex_w > 400:
+            ex_w = 400
+            ex_h = int(ex_w / ex_aspect)
+        exemplar_resized = exemplar.resize((ex_w, ex_h), Image.Resampling.LANCZOS)
+
+        # Resize target
+        tg_aspect = target.width / target.height
+        tg_h = target_h
+        tg_w = int(tg_h * tg_aspect)
+        target_resized = target.resize((tg_w, tg_h), Image.Resampling.LANCZOS)
+
+        # Create merged image: [EXEMPLAR | TARGET]
+        merged_w = ex_w + tg_w
+        merged_h = max(ex_h, tg_h)
+        merged = Image.new('RGB', (merged_w, merged_h), (128, 128, 128))
+
+        # Paste exemplar on left
+        exemplar_y = (merged_h - ex_h) // 2
+        merged.paste(exemplar_resized, (0, exemplar_y))
+
+        # Paste target on right
+        target_y = (merged_h - tg_h) // 2
+        merged.paste(target_resized, (ex_w, target_y))
+
+        # Exemplar bbox covers the entire left portion
+        exemplar_bbox = [0, exemplar_y, ex_w, exemplar_y + ex_h]
+
+        # Target starts at x = ex_w
+        target_x_offset = ex_w
+
+        return merged, exemplar_bbox, target_x_offset
+
+    def _detect_with_sam3_text(self, image: Image.Image, category: str, description: str, img_width: int, img_height: int) -> List[Dict]:
+        """
+        Use native SAM3 processor with text prompt.
+        """
+        try:
+            display_names = {
+                "potholes": "pothole",
+                "alligator_cracks": "cracked road surface",
+                "longitudinal_cracks": "crack line on road",
+                "transverse_cracks": "horizontal crack on road",
+                "block_cracks": "block pattern cracks",
+                "edge_cracks": "edge crack on road",
+                "manholes": "manhole cover",
+                "damaged_crosswalks": "damaged crosswalk",
+                "graffiti": "graffiti spray paint",
+                "road_surface_damage": "damaged road surface"
+            }
+            text_prompt = display_names.get(category, category.replace("_", " "))
+
+            print(f"      [SAM3-TEXT] Using SAM3 text prompt: '{text_prompt}'")
+
+            # Set image
+            inference_state = self.sam3_processor.set_image(image)
+
+            # Text prompt
+            output = self.sam3_processor.set_text_prompt(
+                state=inference_state,
+                prompt=text_prompt
+            )
+
+            if output is None:
+                return []
+
+            # Extract masks
+            masks = None
+            scores = []
+
+            if hasattr(output, 'masks'):
+                masks = output.masks
+            elif isinstance(output, dict) and 'masks' in output:
+                masks = output['masks']
+
+            if hasattr(output, 'scores'):
+                scores = output.scores
+            elif isinstance(output, dict) and 'scores' in output:
+                scores = output['scores']
+
+            if masks is None or len(masks) == 0:
+                return []
+
+            detections = []
+            for i, mask in enumerate(masks):
+                # Convert mask to numpy
+                if hasattr(mask, 'cpu'):
+                    mask_np = mask.cpu().numpy()
+                elif hasattr(mask, 'numpy'):
+                    mask_np = mask.numpy()
                 else:
-                    print(f"      [EXEMPLAR] Filtered out detection in exemplar area: {det['bbox']}")
+                    mask_np = np.array(mask)
 
-            detections = filtered_detections
-            print(f"      [EXEMPLAR] Parsed {len(detections)} detections for '{category}'")
+                # Ensure 2D
+                while len(mask_np.shape) > 2:
+                    mask_np = mask_np[0]
 
-            # Force correct label
-            for d in detections:
-                d['label'] = category
-                d['used_exemplars'] = True
+                bbox = self._mask_to_bbox(mask_np)
+                score = float(scores[i]) if i < len(scores) else 0.7
 
-            if detections:
-                print(f"      [EXEMPLAR] SUCCESS: Found {len(detections)} {category}")
-            else:
-                # FALLBACK: Exemplar detection returned nothing, try text-only
-                print(f"      [EXEMPLAR] Returned 0 results, trying text-only fallback...")
-                text_detections = self._detect_with_text_only(image, category, description, img_width, img_height)
-                if text_detections:
-                    print(f"      [FALLBACK] Text-only found {len(text_detections)} {category}")
-                    return text_detections
+                if score >= self.config.confidence_threshold and bbox[2] > bbox[0] and bbox[3] > bbox[1]:
+                    detections.append({
+                        'label': category,
+                        'bbox': bbox,
+                        'confidence': score,
+                        'used_exemplars': False,
+                        'method': 'sam3_text'
+                    })
 
+            print(f"      [SAM3-TEXT] Found {len(detections)} detections")
             return detections
 
         except Exception as e:
-            print(f"      [EXEMPLAR] ERROR for {category}: {e}")
-            # Fallback to text-only detection
-            return self._detect_with_text_only(image, category, description, img_width, img_height)
+            print(f"      [SAM3-TEXT] Error: {e}")
+            return []
+
+    def _mask_to_bbox(self, mask: np.ndarray) -> List[int]:
+        """Convert binary mask to bounding box [x1, y1, x2, y2]."""
+        if mask.sum() == 0:
+            return [0, 0, 0, 0]
+
+        rows = np.any(mask > 0.5, axis=1)
+        cols = np.any(mask > 0.5, axis=0)
+
+        if not rows.any() or not cols.any():
+            return [0, 0, 0, 0]
+
+        y1, y2 = np.where(rows)[0][[0, -1]]
+        x1, x2 = np.where(cols)[0][[0, -1]]
+
+        return [int(x1), int(y1), int(x2), int(y2)]
+
+    def _nms_detections(self, detections: List[Dict], iou_threshold: float = 0.3) -> List[Dict]:
+        """Non-Maximum Suppression for detections."""
+        if len(detections) <= 1:
+            return detections
+
+        # Sort by confidence descending
+        sorted_dets = sorted(detections, key=lambda x: x.get('confidence', 0.5), reverse=True)
+
+        def calc_iou(box1, box2):
+            x1 = max(box1[0], box2[0])
+            y1 = max(box1[1], box2[1])
+            x2 = min(box1[2], box2[2])
+            y2 = min(box1[3], box2[3])
+            if x2 <= x1 or y2 <= y1:
+                return 0.0
+            intersection = (x2 - x1) * (y2 - y1)
+            area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+            area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+            union = area1 + area2 - intersection
+            return intersection / union if union > 0 else 0.0
+
+        keep = []
+        for det in sorted_dets:
+            is_duplicate = False
+            for kept in keep:
+                if calc_iou(det['bbox'], kept['bbox']) > iou_threshold:
+                    is_duplicate = True
+                    break
+            if not is_duplicate:
+                keep.append(det)
+
+        return keep
 
     def _parse_json_detection_response(self, response: str, img_width: int, img_height: int) -> List[Dict]:
         """Parse JSON detection response from Qwen."""
