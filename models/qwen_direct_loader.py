@@ -169,9 +169,8 @@ class Qwen3VLDirectDetector:
                 return_tensors="pt"
             )
 
-            # Move to device if not already
-            if not self.use_quantization:
-                inputs = inputs.to(self.device)
+            # Always move inputs to device (required for both quantized and non-quantized models)
+            inputs = inputs.to(self.device)
 
             # Generate with gradient disabled for memory efficiency
             with torch.no_grad():
@@ -300,9 +299,8 @@ class Qwen3VLDirectDetector:
                     return_tensors="pt"
                 )
 
-                # Move to device
-                if not self.use_quantization:
-                    inputs = inputs.to(self.device)
+                # Always move inputs to device
+                inputs = inputs.to(self.device)
 
                 # Generate
                 with torch.no_grad():
