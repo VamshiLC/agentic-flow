@@ -26,19 +26,74 @@ def load_config(config_path="categories_config.json"):
 
 
 def draw_detections(image, detections, category, color):
-    """Draw bounding boxes for detected objects."""
+    """Draw premium-style bounding boxes for detected objects."""
     output = image.copy()
 
     for i, box in enumerate(detections):
         x1, y1, x2, y2 = [int(v) for v in box]
-        cv2.rectangle(output, (x1, y1), (x2, y2), color, 2)
 
-        label = f"{category} {i+1}"
-        label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-        cv2.rectangle(output, (x1, y1 - label_size[1] - 10),
-                     (x1 + label_size[0] + 10, y1), color, -1)
-        cv2.putText(output, label, (x1 + 5, y1 - 5),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        # Draw main bounding box (thicker, cleaner)
+        thickness = 3
+        cv2.rectangle(output, (x1, y1), (x2, y2), color, thickness)
+
+        # Draw corner accents for premium look
+        corner_length = 20
+        corner_thickness = 5
+
+        # Top-left corner
+        cv2.line(output, (x1, y1), (x1 + corner_length, y1), color, corner_thickness)
+        cv2.line(output, (x1, y1), (x1, y1 + corner_length), color, corner_thickness)
+
+        # Top-right corner
+        cv2.line(output, (x2, y1), (x2 - corner_length, y1), color, corner_thickness)
+        cv2.line(output, (x2, y1), (x2, y1 + corner_length), color, corner_thickness)
+
+        # Bottom-left corner
+        cv2.line(output, (x1, y2), (x1 + corner_length, y2), color, corner_thickness)
+        cv2.line(output, (x1, y2), (x1, y2 - corner_length), color, corner_thickness)
+
+        # Bottom-right corner
+        cv2.line(output, (x2, y2), (x2 - corner_length, y2), color, corner_thickness)
+        cv2.line(output, (x2, y2), (x2, y2 - corner_length), color, corner_thickness)
+
+        # Premium label styling
+        label = f"{category.upper()}"
+        font = cv2.FONT_HERSHEY_DUPLEX
+        font_scale = 0.7
+        font_thickness = 2
+
+        # Get label size
+        (label_w, label_h), baseline = cv2.getTextSize(label, font, font_scale, font_thickness)
+
+        # Label background position (top of box)
+        label_y1 = max(20, y1 - label_h - 15)
+        label_y2 = y1 - 5
+        label_x2 = x1 + label_w + 20
+
+        # Draw label background with shadow effect
+        shadow_offset = 2
+        cv2.rectangle(output,
+                     (x1 + shadow_offset, label_y1 + shadow_offset),
+                     (label_x2 + shadow_offset, label_y2 + shadow_offset),
+                     (0, 0, 0), -1)
+
+        # Draw main label background
+        cv2.rectangle(output, (x1, label_y1), (label_x2, label_y2), color, -1)
+
+        # Draw label border
+        cv2.rectangle(output, (x1, label_y1), (label_x2, label_y2), (255, 255, 255), 2)
+
+        # Draw text with shadow for better readability
+        text_x = x1 + 10
+        text_y = label_y2 - 8
+
+        # Text shadow
+        cv2.putText(output, label, (text_x + 1, text_y + 1),
+                   font, font_scale, (0, 0, 0), font_thickness + 1)
+
+        # Main text (white)
+        cv2.putText(output, label, (text_x, text_y),
+                   font, font_scale, (255, 255, 255), font_thickness)
 
     return output
 
