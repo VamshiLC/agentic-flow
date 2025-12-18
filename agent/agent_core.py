@@ -543,7 +543,7 @@ class InfrastructureDetectionAgentCore:
             ],
             "infrastructure": [
                 ("manholes", "round or square metal covers on road surface, utility access covers, sewer covers"),
-                ("damaged_crosswalks", "faded white lines of pedestrian crossing, worn crosswalk markings"),
+                ("damaged_crosswalks", "faded WHITE PAINTED zebra stripes of pedestrian crossing - NOT road cracks or pavement damage"),
                 ("dumped_trash", "garbage bags, piles of trash, illegally dumped items, debris, litter piles, discarded furniture or appliances"),
                 ("street_signs", "stop signs, speed limit signs, street name signs, warning signs, any road signage"),
                 ("traffic_lights", "traffic signal lights, red/yellow/green lights at intersections"),
@@ -605,11 +605,91 @@ If you find REAL potholes, output JSON:
 Image size: {img_width} x {img_height} pixels.
 
 If NO potholes exist, output: []"""
+
+        # Special prompts for CRACK detection - must be TIGHT bounding boxes
+        elif category == "longitudinal_cracks":
+            prompt = f"""Find longitudinal cracks in this road image.
+
+Longitudinal cracks are NARROW cracks running PARALLEL to the road direction.
+
+CRITICAL RULES:
+1. Bounding box must be TIGHT around the actual crack only
+2. Box WIDTH should be narrow (cracks are thin lines, not wide areas)
+3. Do NOT draw boxes spanning the entire image width
+4. Each crack should have its own separate bounding box
+
+If crack runs vertically in image: box should be NARROW width, taller height
+If crack runs horizontally: box should be wider, but NARROW height
+
+Output JSON with TIGHT bounding boxes:
+[{{"label": "longitudinal_cracks", "bbox_2d": [x1, y1, x2, y2]}}]
+
+Image size: {img_width} x {img_height} pixels.
+If NO longitudinal cracks, output: []"""
+
+        elif category == "transverse_cracks":
+            prompt = f"""Find transverse cracks in this road image.
+
+Transverse cracks run ACROSS/PERPENDICULAR to the road direction.
+
+CRITICAL RULES:
+1. Bounding box must be TIGHT around the actual crack only
+2. Box HEIGHT should be narrow (cracks are thin lines)
+3. Do NOT draw boxes spanning large areas
+4. Each crack should have its own separate bounding box
+
+Output JSON with TIGHT bounding boxes:
+[{{"label": "transverse_cracks", "bbox_2d": [x1, y1, x2, y2]}}]
+
+Image size: {img_width} x {img_height} pixels.
+If NO transverse cracks, output: []"""
+
+        elif category == "alligator_cracks":
+            prompt = f"""Find alligator cracks (fatigue cracks) in this road image.
+
+Alligator cracks form interconnected patterns like alligator skin or spider web.
+
+CRITICAL RULES:
+1. Bounding box should cover ONLY the cracked area
+2. Do NOT include undamaged road surface in the box
+3. Box should fit tightly around the pattern of cracks
+
+Output JSON with TIGHT bounding boxes:
+[{{"label": "alligator_cracks", "bbox_2d": [x1, y1, x2, y2]}}]
+
+Image size: {img_width} x {img_height} pixels.
+If NO alligator cracks, output: []"""
+
+        elif category == "damaged_crosswalks":
+            prompt = f"""Find damaged or faded crosswalks in this road image.
+
+A crosswalk is WHITE PAINTED ZEBRA STRIPES for pedestrians to cross.
+
+WHAT TO LOOK FOR:
+- Faded white painted stripes that are worn/damaged
+- Zebra crossing markings that are barely visible
+- White parallel lines painted across the road
+
+DO NOT DETECT:
+- Road cracks or pavement damage (those are NOT crosswalks)
+- Dark lines/cracks in asphalt (NOT crosswalks)
+- Lane markings or road lines (NOT crosswalks)
+
+ONLY output if you see actual WHITE PAINTED crosswalk stripes that are damaged/faded.
+
+Output JSON:
+[{{"label": "damaged_crosswalks", "bbox_2d": [x1, y1, x2, y2]}}]
+
+Image size: {img_width} x {img_height} pixels.
+If NO damaged crosswalks, output: []"""
+
         else:
             # Normal prompt for all other categories
             prompt = f"""Look at this image. Find ALL instances of: {category}
 
 What to look for: {description}
+
+IMPORTANT: Draw TIGHT bounding boxes around each object. Do NOT draw boxes larger than the actual object.
 
 Output format - JSON array with bounding boxes:
 [{{"label": "{category}", "bbox_2d": [x1, y1, x2, y2]}}]
