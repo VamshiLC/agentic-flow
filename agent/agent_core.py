@@ -559,12 +559,65 @@ class InfrastructureDetectionAgentCore:
             for category, description in categories:
                 detections = self._detect_single_category(image, category, description, img_width, img_height)
                 if detections:
-                    print(f"  ✓ {category}: {len(detections)} found")
-                    all_detections.extend(detections)
+                    # FILTER bad bounding boxes for road defects
+                    filtered = self._filter_bad_detections(detections, img_width, img_height)
+                    if filtered:
+                        print(f"  ✓ {category}: {len(filtered)} found (filtered from {len(detections)})")
+                        all_detections.extend(filtered)
+                    else:
+                        print(f"  - {category}: 0 (all {len(detections)} rejected by filter)")
                 else:
                     print(f"  - {category}: 0")
 
         return all_detections
+
+    def _filter_bad_detections(self, detections: List[Dict], img_width: int, img_height: int) -> List[Dict]:
+        """
+        Filter out bad bounding boxes - especially for road defects.
+
+        Rules:
+        1. Potholes/cracks should not be in top 30% of image (sky/buildings)
+        2. Potholes/cracks should not cover more than 15% of image
+        3. Cracks should be thin (one dimension small)
+        """
+        filtered = []
+        img_area = img_width * img_height
+
+        road_defect_categories = ['potholes', 'pothole', 'cracks', 'crack',
+            'alligator_cracks', 'longitudinal_cracks', 'transverse_cracks']
+
+        for det in detections:
+            label = det.get('label', '').lower()
+            bbox = det.get('bbox', [0, 0, 0, 0])
+            x1, y1, x2, y2 = bbox
+
+            box_width = x2 - x1
+            box_height = y2 - y1
+            box_area = box_width * box_height
+            box_center_y = (y1 + y2) / 2
+
+            # Check if this is a road defect category
+            if label in road_defect_categories:
+                # Rule 1: Must be in lower 70% of image (road area)
+                if box_center_y < img_height * 0.3:
+                    print(f"    [REJECT] {label}: in sky/building area (y={box_center_y:.0f} < {img_height*0.3:.0f})")
+                    continue
+
+                # Rule 2: Must not be too large (max 15% of image)
+                if box_area > img_area * 0.15:
+                    print(f"    [REJECT] {label}: too large ({box_area/img_area*100:.1f}% > 15%)")
+                    continue
+
+                # Rule 3: For cracks, must be thin (one dimension < 20% of image)
+                if 'crack' in label:
+                    min_dim = min(box_width, box_height)
+                    if min_dim > min(img_width, img_height) * 0.2:
+                        print(f"    [REJECT] {label}: crack too thick (min_dim={min_dim:.0f})")
+                        continue
+
+            filtered.append(det)
+
+        return filtered
 
     def _detect_single_category(self, image: Image.Image, category: str, description: str, img_width: int, img_height: int) -> List[Dict]:
         """Detect a single category, using exemplars if available."""
