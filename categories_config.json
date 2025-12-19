@@ -1,6 +1,7 @@
 {
   "blur_categories": [
-    "face"
+    "face",
+    "license plate"
   ],
   "detect_categories": [],
   "settings": {
