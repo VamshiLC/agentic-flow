@@ -71,79 +71,66 @@ Now analyze this image for license plates ONLY (not tyres, wheels, or other part
 def build_ocr_prompt() -> str:
     """
     Build prompt for extracting text from a cropped license plate image.
-    Optimized for North American plate formats.
+    Optimized for North American plate formats with confusion handling.
     """
-    return """You are a license plate OCR specialist for North American plates.
+    return """You are an expert license plate OCR specialist. Read the plate text CHARACTER BY CHARACTER.
 
-YOUR TASK: Read and extract ALL text from this license plate image.
+YOUR TASK: Extract the EXACT text from this license plate image.
 
-NORTH AMERICAN PLATE FORMATS:
+CRITICAL - AVOID COMMON OCR MISTAKES:
+These characters are often confused - look carefully:
+- 0 (zero) vs O (letter O) - zero is more oval, O is rounder
+- 1 (one) vs I (letter I) vs L (letter L) - check for serifs
+- 8 (eight) vs B (letter B) - 8 has two equal loops, B has unequal bumps
+- 5 (five) vs S (letter S) - 5 has flat top, S is curved
+- 2 (two) vs Z (letter Z) - 2 has curved bottom, Z is angular
+- 6 (six) vs G (letter G) - 6 is closed, G has horizontal bar
+- 4 (four) vs A (letter A) - 4 is angular, A has crossbar lower
 
-US Plates (by state examples):
-- Standard: ABC 1234, ABC-1234
-- California: 8ABC123 (digit + 3 letters + 3 digits)
-- Texas: ABC-1234
-- New York: ABC-1234
-- Florida: ABC A12
-- Vanity plates: Up to 7 characters, custom text
+READING RULES:
+1. Read LEFT to RIGHT, one character at a time
+2. License plates use ONLY UPPERCASE letters (A-Z) and digits (0-9)
+3. Look for spaces or hyphens between character groups
+4. Focus on the MAIN plate text, ignore small state slogans
+5. If a character is unclear, make your best guess based on context
 
-Canadian Plates:
-- Ontario: ABCD 123 (4 letters + space + 3 digits)
-- Quebec: 123 ABC
-- British Columbia: AB1 23C
-- Alberta: ABC-1234
+NORTH AMERICAN FORMATS (for context):
+- California: 1ABC234 (digit + 3 letters + 3 digits)
+- Texas/Standard US: ABC-1234 or ABC 1234 (3 letters + 4 digits)
+- Ontario: ABCD 123 (4 letters + 3 digits)
+- Quebec: 123 ABC (3 digits + 3 letters)
+- Mexico: ABC-12-34 (3 letters + 2 digits + 2 digits)
 
-Mexican Plates:
-- Format: ABC-12-34 (3 letters + 2 digits + 2 digits)
-- State abbreviation may be present
-
-READING INSTRUCTIONS:
-1. Read ALL characters on the plate (letters and numbers)
-2. Maintain the exact order as they appear left to right
-3. Include spaces, hyphens, or dots if present between character groups
-4. Note the state/province name if visible at top or bottom
-5. Ignore decorative elements, slogans, or small text
-6. If characters are partially obscured, use [?] for unclear characters
-
-OUTPUT FORMAT:
-PlateText: <EXACT_TEXT_ON_PLATE>
+OUTPUT FORMAT (use exactly this format):
+PlateText: <THE_EXACT_CHARACTERS>
 Confidence: <0.0-1.0>
-State: <state/province name if visible, otherwise "Unknown">
-Format: <plate format description>
+State: <state/province if visible, else "Unknown">
+Format: <brief format description>
 
 EXAMPLES:
 
-Example 1 - California plate:
-PlateText: 8ABC123
+PlateText: 7ABC123
 Confidence: 0.95
 State: California
-Format: California standard (1 digit + 3 letters + 3 digits)
+Format: California standard
 
-Example 2 - Texas plate:
 PlateText: ABC-1234
 Confidence: 0.92
 State: Texas
-Format: US standard with hyphen
+Format: US standard
 
-Example 3 - Ontario plate:
 PlateText: ABCD 123
 Confidence: 0.88
 State: Ontario
-Format: Ontario standard (4 letters + 3 digits)
+Format: Ontario standard
 
-Example 4 - Partial read:
-PlateText: AB[?] 1234
-Confidence: 0.65
-State: Unknown
-Format: US standard (partial)
-
-If text is completely unreadable:
+If completely unreadable:
 PlateText: UNREADABLE
 Confidence: 0.0
 State: Unknown
 Format: Unknown
 
-Now read the text on this license plate:"""
+Now carefully read each character on this plate:"""
 
 
 def build_combined_detection_ocr_prompt() -> str:

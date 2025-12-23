@@ -12,7 +12,7 @@ import re
 import torch
 import numpy as np
 from PIL import Image
-from typing import List, Dict, Optional, Union, Tuple
+from typing import List, Dict, Optional, Union, Tuple, Any
 import logging
 
 # Import Qwen model loader
@@ -24,6 +24,14 @@ from .prompts import (
     build_combined_detection_ocr_prompt
 )
 from .sam3_tracker import SAM3PlateTracker
+from .utils import (
+    preprocess_plate_for_ocr,
+    upscale_plate,
+    is_plate_blurry,
+    correct_ocr_text,
+    MultiFrameOCRVoter,
+    identify_state_from_text
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +54,9 @@ class LicensePlateOCR:
         use_quantization: bool = False,
         low_memory: bool = False,
         use_sam3: bool = True,
-        plate_padding: float = 0.1
+        plate_padding: float = 0.15,
+        enable_preprocessing: bool = True,
+        enable_multi_frame_voting: bool = True
     ):
         """
         Initialize license plate OCR agent.
@@ -57,12 +67,19 @@ class LicensePlateOCR:
             use_quantization: Use 8-bit quantization for lower memory
             low_memory: Enable additional memory optimizations
             use_sam3: Use SAM3 for detection/tracking (recommended)
-            plate_padding: Padding ratio when cropping plate (0.1 = 10%)
+            plate_padding: Padding ratio when cropping plate (0.15 = 15%)
+            enable_preprocessing: Apply image preprocessing for better OCR
+            enable_multi_frame_voting: Use multi-frame voting for video
         """
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.plate_padding = plate_padding
         self.use_quantization = use_quantization
         self.use_sam3 = use_sam3
+        self.enable_preprocessing = enable_preprocessing
+        self.enable_multi_frame_voting = enable_multi_frame_voting
+
+        # Multi-frame OCR voting for video tracking
+        self.ocr_voter = MultiFrameOCRVoter(min_votes=3, max_history=30) if enable_multi_frame_voting else None
 
         print(f"\n{'='*60}")
         print("LICENSE PLATE OCR - Initializing")
@@ -157,6 +174,7 @@ class LicensePlateOCR:
         Detect plates using SAM3 and read text using Qwen3-VL.
 
         SAM3 handles detection + tracking, Qwen handles OCR.
+        Uses multi-frame voting for better accuracy when tracking.
         """
         logger.info("SAM3: Detecting and tracking plates...")
 
@@ -178,26 +196,52 @@ class LicensePlateOCR:
 
             logger.info(f"Qwen OCR: Reading plate {i+1}/{len(detections)}...")
 
-            # Crop plate region with padding
+            # Crop plate region with padding and preprocessing
             cropped_plate = self._crop_plate_region(image, bbox)
 
             # Run OCR on cropped plate using Qwen
             ocr_result = self._read_plate_text(cropped_plate)
 
+            raw_text = ocr_result.get('text', 'UNREADABLE')
+            ocr_confidence = ocr_result.get('confidence', 0.0)
+            state = ocr_result.get('state', 'Unknown')
+
+            # Try to identify state from plate format if not detected
+            if state == 'Unknown' and raw_text != 'UNREADABLE':
+                detected_state = identify_state_from_text(raw_text)
+                if detected_state:
+                    state = detected_state
+
+            # Apply text correction based on detected format
+            corrected_text = correct_ocr_text(raw_text, expected_format=state.lower() if state != 'Unknown' else None)
+
+            # Use multi-frame voting if tracking is enabled
+            track_id = det.get('track_id')
+            final_text = corrected_text
+            final_confidence = ocr_confidence
+
+            if track_id is not None and self.ocr_voter is not None:
+                # Add reading to voter and get voted result
+                voted_text, voted_confidence = self.ocr_voter.add_reading(track_id, corrected_text)
+                if voted_confidence > final_confidence:
+                    final_text = voted_text
+                    final_confidence = voted_confidence
+                    logger.info(f"  Multi-frame voting: {voted_text} (conf: {voted_confidence:.2f})")
+
             plate = {
                 'bbox': bbox,
                 'confidence': det.get('confidence', 0.8),
-                'plate_text': ocr_result.get('text', 'UNREADABLE'),
-                'ocr_confidence': ocr_result.get('confidence', 0.0),
-                'state': ocr_result.get('state', 'Unknown'),
+                'plate_text': final_text,
+                'ocr_confidence': final_confidence,
+                'state': state,
                 'format': ocr_result.get('format', 'Unknown'),
                 'mask': det.get('mask'),
                 'color': (255, 165, 0)
             }
 
             # Add track_id if available (from SAM3 tracking)
-            if 'track_id' in det:
-                plate['track_id'] = det['track_id']
+            if track_id is not None:
+                plate['track_id'] = track_id
 
             enhanced_plates.append(plate)
             logger.info(f"  Plate text: {plate['plate_text']} (conf: {plate['ocr_confidence']:.2f})")
@@ -289,17 +333,19 @@ class LicensePlateOCR:
     def _crop_plate_region(
         self,
         image: Image.Image,
-        bbox: List[int]
+        bbox: List[int],
+        apply_preprocessing: bool = True
     ) -> Image.Image:
         """
-        Crop plate region with padding for better OCR.
+        Crop plate region with padding and preprocessing for better OCR.
 
         Args:
             image: Full image
             bbox: [x1, y1, x2, y2] bounding box
+            apply_preprocessing: Apply image preprocessing
 
         Returns:
-            Cropped plate image with padding
+            Cropped and preprocessed plate image
         """
         x1, y1, x2, y2 = bbox
         width, height = image.size
@@ -314,7 +360,34 @@ class LicensePlateOCR:
         x2 = min(width, x2 + pad_w)
         y2 = min(height, y2 + pad_h)
 
-        return image.crop((x1, y1, x2, y2))
+        cropped = image.crop((x1, y1, x2, y2))
+
+        # Apply preprocessing if enabled
+        if apply_preprocessing and self.enable_preprocessing:
+            # Convert to numpy for preprocessing
+            plate_np = np.array(cropped)
+
+            # Check if plate is too blurry
+            if is_plate_blurry(plate_np, threshold=50.0):
+                logger.warning("Plate image is blurry, OCR may be less accurate")
+
+            # Upscale small plates for better OCR
+            plate_np = upscale_plate(plate_np)
+
+            # Apply contrast enhancement (keep color for VLM)
+            plate_np = preprocess_plate_for_ocr(
+                plate_np,
+                apply_grayscale=False,  # Keep color for VLM
+                apply_clahe=True,
+                apply_denoise=True,
+                apply_sharpen=False,
+                apply_deskew=False
+            )
+
+            # Convert back to PIL
+            cropped = Image.fromarray(plate_np)
+
+        return cropped
 
     def _read_plate_text(self, plate_image: Image.Image) -> Dict:
         """
@@ -515,9 +588,17 @@ class LicensePlateOCR:
         return plates
 
     def reset_tracker(self):
-        """Reset tracker for new video."""
+        """Reset tracker and OCR voter for new video."""
         if self.sam3_tracker:
             self.sam3_tracker.reset()
+        if self.ocr_voter:
+            self.ocr_voter.reset()
+
+    def get_final_ocr_results(self) -> Dict[int, Tuple[str, float]]:
+        """Get final voted OCR results for all tracked plates."""
+        if self.ocr_voter:
+            return self.ocr_voter.get_all_final_results()
+        return {}
 
     def init_video(self, first_frame: Union[Image.Image, np.ndarray]):
         """Initialize video tracking with first frame."""
